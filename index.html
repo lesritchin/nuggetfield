@@ -82,13 +82,15 @@
   <h1>NUGGETFIELD</h1>
   <div class="sub">INFINITE ORB FIELD</div>
   <div class="keys">
-    <span><b>Mouse</b></span><span>look around</span>
+    <span><b>Mouse</b></span><span>look around (full 360°)</span>
     <span><b>W&nbsp;A&nbsp;S&nbsp;D</b></span><span>thrust forward / strafe</span>
     <span><b>Space&nbsp;/&nbsp;C</b></span><span>thrust up / down</span>
+    <span><b>Q&nbsp;/&nbsp;E</b></span><span>roll thrusters — anti-clockwise / clockwise (zero-g spin)</span>
     <span><b>Shift</b></span><span>boost</span>
-    <span><b>X</b></span><span>brake (full stop)</span>
+    <span><b>X</b></span><span>brake — stop motion &amp; spin</span>
     <span><b>V</b></span><span>toggle Cardboard 3D (split screen)</span>
     <span><b>Esc</b></span><span>release mouse</span>
+    <span><b>Phone</b></span><span>move to look · touch &amp; hold to fly</span>
   </div>
   <div class="enter">CLICK TO FLY</div>
   <div id="loaderr"></div>
@@ -151,6 +153,8 @@ const CONFIG = {
   damping:     0.0,       // 0 = true zero-g: momentum preserved until you brake (X)
   brake:       4.0,       // extra damping while holding X (1/s)
   lookSpeed:   0.0022,    // mouse sensitivity (rad/px)
+  rollAccel:   2.6,       // Q/E roll thruster — angular acceleration (rad/s^2)
+  maxRoll:     3.2,       // max spin rate cap (rad/s)
 
   // Atmosphere
   fogDensity:  0.0085,    // FogExp2 — tuned so orbs fade out well before the wrap edge
@@ -583,26 +587,83 @@ composer.addPass(new OutputPass());
 // ============================================================================
 const keys = Object.create(null);
 let locked = false;
-let yaw = 0, pitch = 0;
-const maxPitch = Math.PI / 2 - 0.05;
-const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
 const velocity = new THREE.Vector3();
-const worldUp = new THREE.Vector3(0, 1, 0);
-const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _thrust = new THREE.Vector3();
+let rollVel = 0; // angular velocity about the local forward axis (rad/s) — zero-g, persists
+const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _up = new THREE.Vector3(), _thrust = new THREE.Vector3();
 
-function applyLook() {
-  _euler.set(pitch, yaw, 0);
-  camera.quaternion.setFromEuler(_euler);
+// True 6DOF orientation: the camera quaternion is the single source of truth.
+// Every look/roll input is an incremental rotation about a *local* axis, so there
+// are no poles to get stuck at — you can loop straight over the top or barrel-roll.
+const _AXIS_X = new THREE.Vector3(1, 0, 0); // pitch axis (local right)
+const _AXIS_Y = new THREE.Vector3(0, 1, 0); // yaw axis   (local up)
+const _AXIS_Z = new THREE.Vector3(0, 0, 1); // roll axis  (local back)
+const _rotQ = new THREE.Quaternion();
+function rotateLocal(axis, angle) {
+  if (!angle) return;
+  _rotQ.setFromAxisAngle(axis, angle);
+  camera.quaternion.multiply(_rotQ).normalize(); // post-multiply = rotate in local space
 }
-applyLook();
 
 addEventListener('mousemove', (e) => {
+  if (gyroLook) return;          // on a phone the gyroscope owns the look
   if (!locked) return;
-  yaw   -= e.movementX * CONFIG.lookSpeed;
-  pitch -= e.movementY * CONFIG.lookSpeed;
-  pitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
-  applyLook();
+  rotateLocal(_AXIS_Y, -e.movementX * CONFIG.lookSpeed); // yaw
+  rotateLocal(_AXIS_X, -e.movementY * CONFIG.lookSpeed); // pitch (no clamp → full 360°)
 });
+
+// ----------------------------------------------------------------------------
+//  Mobile "move to look" — phone gyroscope drives the view (great for Cardboard)
+// ----------------------------------------------------------------------------
+// DeviceOrientation reports the phone's *absolute* orientation; we convert it to
+// the camera quaternion every frame so the viewport tracks the phone 1:1. While
+// active it owns the look (mouse + Q/E roll are desktop-only), so they never fight.
+let gyroLook = false;          // true once orientation events start flowing
+let touchThrust = false;       // tap-and-hold the screen = thrust where you're looking
+const DEG = Math.PI / 180;
+const _gyroQuat = new THREE.Quaternion();
+const _screenQ  = new THREE.Quaternion();
+const _ZEE = new THREE.Vector3(0, 0, 1);
+// device frame (Z out of the screen) → camera frame (looking out the back): −90° about X
+const _DEVICE_TO_CAM = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+const _gyroEuler = new THREE.Euler();
+let screenOrient = 0;          // current screen rotation (portrait/landscape), radians
+
+function readScreenOrient() {
+  const a = (screen.orientation && typeof screen.orientation.angle === 'number')
+    ? screen.orientation.angle
+    : (typeof window.orientation === 'number' ? window.orientation : 0);
+  screenOrient = a * DEG;
+}
+readScreenOrient();
+addEventListener('orientationchange', readScreenOrient);
+
+function onDeviceOrientation(e) {
+  if (e.alpha == null && e.beta == null && e.gamma == null) return;     // no sensor data
+  if (!gyroLook) { gyroLook = true; overlay.classList.add('hidden'); }  // first reading → go
+  // alpha = around Z (compass heading), beta = front/back tilt, gamma = left/right tilt
+  _gyroEuler.set((e.beta || 0) * DEG, (e.alpha || 0) * DEG, -(e.gamma || 0) * DEG, 'YXZ');
+  _gyroQuat.setFromEuler(_gyroEuler);
+  _gyroQuat.multiply(_DEVICE_TO_CAM);                                    // look out the back
+  _gyroQuat.multiply(_screenQ.setFromAxisAngle(_ZEE, -screenOrient));   // honour screen rotation
+}
+
+// iOS 13+ requires a tap-gesture permission grant; Android/desktop just start listening.
+function enableGyroLook() {
+  const DOE = window.DeviceOrientationEvent;
+  if (!DOE) return;
+  if (typeof DOE.requestPermission === 'function') {
+    DOE.requestPermission()
+      .then((state) => { if (state === 'granted') addEventListener('deviceorientation', onDeviceOrientation); })
+      .catch(() => {});
+  } else {
+    addEventListener('deviceorientation', onDeviceOrientation);
+  }
+}
+
+// gaze-and-go: hold a finger on the screen to thrust the way you're looking
+addEventListener('touchstart',  () => { if (gyroLook) touchThrust = true; }, { passive: true });
+addEventListener('touchend',    (e) => { if (!e.touches || e.touches.length === 0) touchThrust = false; }, { passive: true });
+addEventListener('touchcancel', () => { touchThrust = false; }, { passive: true });
 
 addEventListener('keydown', (e) => {
   keys[e.code] = true;
@@ -612,7 +673,8 @@ addEventListener('keydown', (e) => {
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 overlay.addEventListener('click', () => {
-  const p = renderer.domElement.requestPointerLock?.();
+  enableGyroLook();                                  // mobile: request gyro + start tracking
+  const p = renderer.domElement.requestPointerLock?.(); // desktop: lock the mouse (no-op on phones)
   if (p && p.catch) p.catch(() => {});
 });
 document.addEventListener('pointerlockchange', () => {
@@ -621,17 +683,36 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 function updateMovement(dt) {
+  if (gyroLook) {
+    // Mobile: the phone's orientation is the look — move the phone, the view follows.
+    camera.quaternion.copy(_gyroQuat);
+  } else {
+    // Roll thrusters (zero-g): tap/hold E (clockwise) or Q (anti-clockwise) to fire a
+    // thruster that imparts angular momentum about the local forward axis. Like the WASD
+    // thrusters, nothing damps it — you keep spinning until you counter-thrust or brake (X).
+    if (locked) {
+      if (keys['KeyE']) rollVel -= CONFIG.rollAccel * dt;
+      if (keys['KeyQ']) rollVel += CONFIG.rollAccel * dt;
+    }
+    const rollDamp = keys['KeyX'] ? CONFIG.brake : 0;
+    if (rollDamp > 0) rollVel *= Math.exp(-rollDamp * dt);
+    rollVel = Math.max(-CONFIG.maxRoll, Math.min(CONFIG.maxRoll, rollVel));
+    rotateLocal(_AXIS_Z, rollVel * dt);
+  }
+
   _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
   _right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  _up.set(0, 1, 0).applyQuaternion(camera.quaternion);
   _thrust.set(0, 0, 0);
   if (locked) {
     if (keys['KeyW']) _thrust.add(_fwd);
     if (keys['KeyS']) _thrust.sub(_fwd);
     if (keys['KeyD']) _thrust.add(_right);
     if (keys['KeyA']) _thrust.sub(_right);
-    if (keys['Space']) _thrust.add(worldUp);
-    if (keys['KeyC']) _thrust.sub(worldUp);
+    if (keys['Space']) _thrust.add(_up);
+    if (keys['KeyC']) _thrust.sub(_up);
   }
+  if (gyroLook && touchThrust) _thrust.add(_fwd); // gaze-and-go: hold screen to fly forward
   const boosting = keys['ShiftLeft'] || keys['ShiftRight'];
   const boost = boosting ? CONFIG.boost : 1;
   if (_thrust.lengthSq() > 0) {
@@ -687,9 +768,11 @@ function animate() {
   fps += ((1 / Math.max(dt, 1e-3)) - fps) * 0.1;
   if (statTimer > 0.12) {
     statTimer = 0;
+    const spinDeg = rollVel * 180 / Math.PI;
     stats.textContent =
       `SPEED  ${speed.toFixed(0).padStart(3)} u/s` +
       `${(keys['ShiftLeft']||keys['ShiftRight']) ? '  ⟫BOOST' : ''}\n` +
+      `${Math.abs(spinDeg) >= 1 ? `SPIN   ${(spinDeg >= 0 ? '↺' : '↻')}${Math.abs(spinDeg).toFixed(0).padStart(3)}°/s\n` : ''}` +
       `FPS    ${fps.toFixed(0).padStart(3)}` +
       `${scenePass.stereoEnabled ? '   ◐ 3D' : ''}`;
   }

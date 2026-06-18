@@ -4,7 +4,8 @@ An infinite, randomly generated field of solid glowing orbs you can float throug
 a browser homage to the VR "orb field" simulation from *The Lawnmower Man*.
 
 Thousands of shaded orbs of varying size and colour stretch out in every direction. You
-drift through them weightlessly with zero-g thrusters and look around with the mouse. 
+drift through them weightlessly with zero-g thrusters and look around with the mouse - or,
+on a phone, just **move the phone** and the view tracks with it (ideal for Cardboard 3D).
 
 Built with [Three.js](https://threejs.org/) `0.184.0` (loaded from a CDN via an import map).
 
@@ -30,18 +31,23 @@ nicer but not required.
 
 | Input | Action |
 | --- | --- |
-| **Mouse** | look around (yaw / pitch) |
+| **Mouse** | look around 360° |
 | **W / S** | thrust forward / back |
 | **A / D** | strafe left / right |
-| **Space / C** | thrust up / down |
+| **Space / C** | thrust up / down (relative to your view) |
+| **Q / E** | roll thrusters - anti-clockwise / clockwise (zero-g: spin persists) |
 | **Shift** | boost (hold) |
-| **X** | brake - come to a full stop |
+| **X** | brake - kill all motion *and* spin |
 | **V** | toggle Google-Cardboard split-screen 3D |
 | **Esc** | release the mouse |
+| **Phone: move the device** | look around (gyroscope "move to look") |
+| **Phone: touch & hold** | thrust forward where you're looking (gaze-and-go) |
 
-Movement is **true zero-g**: thrust adds momentum that's preserved indefinitely - nothing
-damps it, so you keep coasting until you thrust the other way or hold **X** to come to a
-full stop. Bring your own downtempo. 🎧
+Movement is **true zero-g**, and so is rotation: both linear thrust (WASD / Space / C) and
+the **Q / E** roll thrusters add momentum that's preserved indefinitely - nothing damps it.
+Tap **Q** or **E** and you keep tumbling at that rate forever; fire the opposite thruster to
+slow or reverse the spin, or hold **X** to brake all motion and rotation to a dead stop.
+Bring your own downtempo. 🎧
 
 ## How the "infinite" field works
 
@@ -83,6 +89,25 @@ with `eyeSeparation` (bigger = stronger pop-out) and `stereoFocus` (the zero-par
 distance - things nearer pop toward you, farther ones recede). No lens barrel-distortion
 correction is applied, which is fine for casual viewing.
 
+### On a phone — "move to look"
+
+Tap **CLICK TO FLY** and the page asks for motion-sensor access (on iOS the permission
+prompt only appears in response to that tap - that's an Apple rule). Grant it and the phone's
+gyroscope drives the camera: turn or tilt the phone and the viewport turns with you, full
+360° including straight up and down. Since there's no keyboard, **touch and hold anywhere to
+thrust forward** in whatever direction you're looking ("gaze-and-go") - it's still zero-g
+momentum, so let go and you keep coasting. Drop a phone running this into a Cardboard holder
+(open with `?stereo`, or tap **V** before pocketing it) and you've got a poor-man's VR
+orb-field. The look snaps to wherever the phone is pointing relative to compass north when it
+starts, so just turn your body to choose "forward".
+
+> **Heads-up:** browsers only expose motion sensors on a **secure context** - `https://` or
+> `http://localhost`. Opening the page from your computer's LAN IP over plain `http://` (the
+> usual way to reach a dev server from a phone) will silently fail to deliver gyro events. To
+> test on a real phone, serve over HTTPS or use a quick tunnel (e.g. `cloudflared tunnel`,
+> `ngrok http 8000`) and open the `https://` URL. On desktop, no sensor = nothing changes;
+> mouse-look stays in charge.
+
 ## Tuning
 
 Every look/feel value lives in the `CONFIG` object at the top of the `<script>` in
@@ -104,6 +129,8 @@ Every look/feel value lives in the `CONFIG` object at the top of the `<script>` 
 | `satMin/Max`, `litMin/Max` | colour palette saturation / lightness |
 | `sunColor/Intensity/Dir`, `fill*` | the single "sun" + ambient fill |
 | `accel`, `maxSpeed`, `boost`, `damping` | flight feel (`damping: 0` = pure zero-g) |
+| `lookSpeed` | mouse-look sensitivity (rad/px) |
+| `rollAccel` / `maxRoll` | Q/E roll-thruster angular acceleration (rad/s²) and spin-rate cap (rad/s) |
 | `fogDensity` | how quickly orbs fade into the void (keep ≳ the wrap edge hidden) |
 | `bloomStrength/Radius/Threshold`, `trailMax` | glow + motion-blur intensity |
 | `eyeSeparation` / `stereoFocus` | Cardboard 3D depth strength and zero-parallax distance |
