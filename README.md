@@ -41,7 +41,8 @@ nicer but not required.
 | **V** | toggle Google-Cardboard split-screen 3D |
 | **Esc** | release the mouse |
 | **Phone: move the device** | look around (gyroscope "move to look") |
-| **Phone: touch & hold** | thrust forward where you're looking (gaze-and-go) |
+| **Phone: on-screen buttons** | FWD / REV, strafe, up / down, BOOST, STOP, 3D, fullscreen |
+| **Phone: touch & hold (empty screen)** | thrust forward where you're looking (gaze-and-go) |
 
 Movement is **true zero-g**, and so is rotation: both linear thrust (WASD / Space / C) and
 the **Q / E** roll thrusters add momentum that's preserved indefinitely - nothing damps it.
@@ -94,12 +95,25 @@ correction is applied, which is fine for casual viewing.
 Tap **CLICK TO FLY** and the page asks for motion-sensor access (on iOS the permission
 prompt only appears in response to that tap - that's an Apple rule). Grant it and the phone's
 gyroscope drives the camera: turn or tilt the phone and the viewport turns with you, full
-360° including straight up and down. Since there's no keyboard, **touch and hold anywhere to
-thrust forward** in whatever direction you're looking ("gaze-and-go") - it's still zero-g
-momentum, so let go and you keep coasting. Drop a phone running this into a Cardboard holder
-(open with `?stereo`, or tap **V** before pocketing it) and you've got a poor-man's VR
-orb-field. The look snaps to wherever the phone is pointing relative to compass north when it
-starts, so just turn your body to choose "forward".
+360° including straight up and down.
+
+There's no keyboard, so a set of **on-screen controls** fades in once you're flying (only on
+touch devices - desktop keeps using the keyboard):
+
+- **Left thumb pad** - strafe left/right and thrust up/down, relative to your view.
+- **Right thumb** - big **FWD** / **REV** to thrust along your gaze, plus **BOOST** (a sticky
+  tap-to-toggle, since holding it alongside a thrust thumb is awkward).
+- **Top-right** - **3D** (the same Cardboard split-screen as the **V** key), **⛶** fullscreen
+  (Android/desktop - iOS Safari can't fullscreen a page, so the button hides itself there),
+  and **STOP** for an instant dead stop (kills all momentum and spin).
+- You can still **touch and hold an empty part of the screen** to gaze-fly forward
+  ("gaze-and-go") - handy when the phone's in a Cardboard holder and you can't reach buttons.
+
+It's all still zero-g momentum, so let go and you keep coasting - tap **STOP** (or **REV**) to
+shed speed. Drop the phone into a Cardboard holder (open with `?stereo`, or tap **3D** first)
+and you've got a poor-man's VR orb-field; the thumb pads hide in stereo since you can't reach
+them in a headset. The look snaps to wherever the phone points relative to compass north when
+it starts, so just turn your body to choose "forward".
 
 > **Heads-up:** browsers only expose motion sensors on a **secure context** - `https://` or
 > `http://localhost`. Opening the page from your computer's LAN IP over plain `http://` (the

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
 <title>nuggetfield — infinite orb field</title>
 <style>
   :root { color-scheme: dark; }
@@ -60,6 +60,50 @@
   }
   @keyframes pulse { 0%,100%{opacity:0.55} 50%{opacity:1} }
   #loaderr { color:#ff8a8a; font-size:13px; margin-top:20px; max-width:520px; }
+
+  /* ---------- On-screen touch controls (phones / tablets) ---------- */
+  #touchUI { position: fixed; inset: 0; z-index: 9; display: none; pointer-events: none;
+    font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
+  /* shown only on touch devices, and only once you've started flying */
+  body.touch.playing #touchUI { display: block; }
+  /* in Cardboard 3D the phone is in a headset — hide the thumb pads, keep the toggles
+     reachable (so you can tap your way back out of stereo) */
+  body.stereo #touchUI .tPad { display: none; }
+
+  #touchUI .tBtn {
+    pointer-events: auto; -webkit-user-select: none; user-select: none;
+    touch-action: none; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none;
+    display: flex; align-items: center; justify-content: center;
+    width: 58px; height: 58px; border-radius: 16px;
+    border: 1px solid rgba(160,170,255,0.30);
+    background: rgba(20,22,52,0.42); backdrop-filter: blur(3px);
+    color: #cdd6ff; font-size: 13px; font-weight: 700; letter-spacing: 0.06em;
+    text-shadow: 0 0 8px rgba(80,90,200,0.6); cursor: pointer;
+  }
+  #touchUI .tBtn:active, #touchUI .tBtn.on {
+    background: rgba(90,110,255,0.55); color: #fff;
+    border-color: rgba(190,200,255,0.7); box-shadow: 0 0 14px rgba(120,140,255,0.55);
+  }
+  #touchUI .tBtn.tWide { width: 78px; }
+  #touchUI .tBtn.tFwd  { width: 78px; height: 78px; font-size: 15px; }
+
+  /* top-right toggles: 3D / fullscreen / stop */
+  #touchUI .tToggles {
+    position: absolute; top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
+    display: flex; gap: 10px; pointer-events: none;
+  }
+  /* left thumb: a +-pad for up / down / strafe */
+  #touchUI .tLeft {
+    position: absolute; left: calc(16px + env(safe-area-inset-left)); bottom: calc(20px + env(safe-area-inset-bottom));
+    display: grid; gap: 8px; pointer-events: none;
+    grid-template-columns: repeat(3, 58px); grid-template-rows: repeat(3, 58px);
+    grid-template-areas: ".  up ." "lf .  rt" ".  dn .";
+  }
+  /* right thumb: forward / reverse + boost */
+  #touchUI .tRight {
+    position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none;
+  }
 </style>
 
 <script type="importmap">
@@ -90,10 +134,30 @@
     <span><b>X</b></span><span>brake — stop motion &amp; spin</span>
     <span><b>V</b></span><span>toggle Cardboard 3D (split screen)</span>
     <span><b>Esc</b></span><span>release mouse</span>
-    <span><b>Phone</b></span><span>move to look · touch &amp; hold to fly</span>
+    <span><b>Phone</b></span><span>move to look · on-screen buttons to fly · hold to gaze-fly</span>
   </div>
   <div class="enter">CLICK TO FLY</div>
   <div id="loaderr"></div>
+</div>
+
+<!-- On-screen controls for touch devices (no keyboard needed) -->
+<div id="touchUI">
+  <div class="tToggles">
+    <button class="tBtn tWide" data-act="stereo"     aria-label="toggle 3D">3D</button>
+    <button class="tBtn"       data-act="fullscreen" aria-label="fullscreen">⛶</button>
+    <button class="tBtn tWide" data-act="stop"       aria-label="full stop">STOP</button>
+  </div>
+  <div class="tPad tLeft">
+    <button class="tBtn" data-move="up"    style="grid-area:up" aria-label="thrust up">▲</button>
+    <button class="tBtn" data-move="left"  style="grid-area:lf" aria-label="strafe left">◄</button>
+    <button class="tBtn" data-move="right" style="grid-area:rt" aria-label="strafe right">►</button>
+    <button class="tBtn" data-move="down"  style="grid-area:dn" aria-label="thrust down">▼</button>
+  </div>
+  <div class="tPad tRight">
+    <button class="tBtn tFwd"  data-move="fwd"  aria-label="thrust forward">FWD</button>
+    <button class="tBtn tWide" data-move="back" aria-label="thrust back">REV</button>
+    <button class="tBtn tWide" data-act="boost" aria-label="boost">BOOST</button>
+  </div>
 </div>
 
 <script type="module">
@@ -569,7 +633,11 @@ const scenePass = new DualViewRenderPass(scene, camera);
 composer.addPass(scenePass);
 // the thin centre line between the eyes (shown only in stereo); helps line up a holder
 const divider = document.getElementById('divider');
-function setStereo(on) { scenePass.stereoEnabled = on; divider.style.display = on ? 'block' : 'none'; }
+function setStereo(on) {
+  scenePass.stereoEnabled = on;
+  divider.style.display = on ? 'block' : 'none';
+  document.body.classList.toggle('stereo', on);
+}
 // open with ?stereo (or ?cardboard) to start directly in split-screen 3D — handy on a phone
 setStereo(/stereo|cardboard|vr/i.test(location.search + location.hash));
 const afterimage = new AfterimagePass();
@@ -639,7 +707,11 @@ addEventListener('orientationchange', readScreenOrient);
 
 function onDeviceOrientation(e) {
   if (e.alpha == null && e.beta == null && e.gamma == null) return;     // no sensor data
-  if (!gyroLook) { gyroLook = true; overlay.classList.add('hidden'); }  // first reading → go
+  if (!gyroLook) {                                                      // first reading → go
+    gyroLook = true;
+    overlay.classList.add('hidden');
+    document.body.classList.add('playing');
+  }
   // alpha = around Z (compass heading), beta = front/back tilt, gamma = left/right tilt
   _gyroEuler.set((e.beta || 0) * DEG, (e.alpha || 0) * DEG, -(e.gamma || 0) * DEG, 'YXZ');
   _gyroQuat.setFromEuler(_gyroEuler);
@@ -660,10 +732,59 @@ function enableGyroLook() {
   }
 }
 
-// gaze-and-go: hold a finger on the screen to thrust the way you're looking
-addEventListener('touchstart',  () => { if (gyroLook) touchThrust = true; }, { passive: true });
+// reveal the on-screen controls on touch devices (desktop keeps using the keyboard)
+if (matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || navigator.maxTouchPoints > 0) {
+  document.body.classList.add('touch');
+}
+
+// gaze-and-go: hold an empty part of the screen to thrust the way you're looking.
+// Touches that land on a control button are ignored here (the button handles them).
+const onUI = (e) => e.target.closest && e.target.closest('#touchUI');
+addEventListener('touchstart',  (e) => { if (gyroLook && !onUI(e)) touchThrust = true; }, { passive: true });
 addEventListener('touchend',    (e) => { if (!e.touches || e.touches.length === 0) touchThrust = false; }, { passive: true });
 addEventListener('touchcancel', () => { touchThrust = false; }, { passive: true });
+
+// ----------------------------------------------------------------------------
+//  On-screen touch buttons — full control parity without a keyboard
+// ----------------------------------------------------------------------------
+const touchMove = { fwd: false, back: false, left: false, right: false, up: false, down: false };
+let boostOn = false; // sticky on mobile (tap to toggle) — holding it alongside a thrust is awkward
+
+function toggleFullscreen() {
+  const el = document.documentElement;
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  const active = document.fullscreenElement || document.webkitFullscreenElement;
+  try { active ? exit?.call(document) : req?.call(el); } catch {}
+}
+// iOS Safari can't fullscreen arbitrary elements — hide the button there to avoid a dead control
+if (!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)) {
+  document.querySelector('#touchUI [data-act="fullscreen"]')?.remove();
+}
+
+// press-and-hold thrust buttons
+document.querySelectorAll('#touchUI [data-move]').forEach((btn) => {
+  const dir = btn.dataset.move;
+  const set = (v) => (e) => { e.preventDefault(); e.stopPropagation(); touchMove[dir] = v; btn.classList.toggle('on', v); };
+  btn.addEventListener('pointerdown',   set(true));
+  btn.addEventListener('pointerup',     set(false));
+  btn.addEventListener('pointercancel', set(false));
+  btn.addEventListener('pointerleave',  set(false));
+});
+
+// tap-action buttons (3D / fullscreen / stop / boost) — act on pointerup (a user gesture,
+// which fullscreen and the iOS permission flow both require)
+document.querySelectorAll('#touchUI [data-act]').forEach((btn) => {
+  btn.addEventListener('pointerup', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    switch (btn.dataset.act) {
+      case 'stereo':     setStereo(!scenePass.stereoEnabled); break;
+      case 'fullscreen': toggleFullscreen(); break;
+      case 'stop':       velocity.set(0, 0, 0); rollVel = 0; break; // instant dead stop
+      case 'boost':      boostOn = !boostOn; btn.classList.toggle('on', boostOn); break;
+    }
+  });
+});
 
 addEventListener('keydown', (e) => {
   keys[e.code] = true;
@@ -680,6 +801,7 @@ overlay.addEventListener('click', () => {
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === renderer.domElement;
   overlay.classList.toggle('hidden', locked);
+  document.body.classList.toggle('playing', locked);
 });
 
 function updateMovement(dt) {
@@ -713,7 +835,14 @@ function updateMovement(dt) {
     if (keys['KeyC']) _thrust.sub(_up);
   }
   if (gyroLook && touchThrust) _thrust.add(_fwd); // gaze-and-go: hold screen to fly forward
-  const boosting = keys['ShiftLeft'] || keys['ShiftRight'];
+  // on-screen touch buttons (mobile) — relative to where you're looking
+  if (touchMove.fwd)   _thrust.add(_fwd);
+  if (touchMove.back)  _thrust.sub(_fwd);
+  if (touchMove.right) _thrust.add(_right);
+  if (touchMove.left)  _thrust.sub(_right);
+  if (touchMove.up)    _thrust.add(_up);
+  if (touchMove.down)  _thrust.sub(_up);
+  const boosting = keys['ShiftLeft'] || keys['ShiftRight'] || boostOn;
   const boost = boosting ? CONFIG.boost : 1;
   if (_thrust.lengthSq() > 0) {
     _thrust.normalize();
@@ -771,7 +900,7 @@ function animate() {
     const spinDeg = rollVel * 180 / Math.PI;
     stats.textContent =
       `SPEED  ${speed.toFixed(0).padStart(3)} u/s` +
-      `${(keys['ShiftLeft']||keys['ShiftRight']) ? '  ⟫BOOST' : ''}\n` +
+      `${(keys['ShiftLeft']||keys['ShiftRight']||boostOn) ? '  ⟫BOOST' : ''}\n` +
       `${Math.abs(spinDeg) >= 1 ? `SPIN   ${(spinDeg >= 0 ? '↺' : '↻')}${Math.abs(spinDeg).toFixed(0).padStart(3)}°/s\n` : ''}` +
       `FPS    ${fps.toFixed(0).padStart(3)}` +
       `${scenePass.stereoEnabled ? '   ◐ 3D' : ''}`;
