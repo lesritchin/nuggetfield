@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>nuggetfield — infinite orb field</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #04040a; }
+  canvas { display: block; }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position: fixed; inset: 0; pointer-events: none;
+    font-family: "SFMono-Regular", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    color: #aab6ff;
+  }
+  #stats {
+    position: absolute; left: 14px; bottom: 12px;
+    font-size: 12px; letter-spacing: 0.08em; line-height: 1.6;
+    text-shadow: 0 0 8px rgba(80,90,200,0.6);
+    opacity: 0.75; white-space: pre;
+  }
+  #divider {
+    position: absolute; left: 50%; top: 0; bottom: 0;
+    width: 2px; transform: translateX(-1px);
+    background: rgba(170,180,255,0.30);
+    box-shadow: 0 0 5px rgba(120,140,255,0.45);
+    display: none;
+  }
+
+  /* ---------- Start / pause overlay ---------- */
+  #overlay {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: radial-gradient(120% 120% at 50% 40%, rgba(20,16,48,0.55), rgba(4,4,10,0.92));
+    backdrop-filter: blur(2px);
+    font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    color: #dfe4ff; cursor: pointer; transition: opacity 0.45s ease;
+    z-index: 10;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  #overlay h1 {
+    font-size: clamp(28px, 6vw, 64px); font-weight: 800; letter-spacing: 0.18em;
+    background: linear-gradient(90deg, #7df9ff, #b18cff 45%, #ff9ad5);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    text-shadow: 0 0 40px rgba(150,120,255,0.25); margin-bottom: 6px;
+  }
+  #overlay .sub { font-size: 13px; letter-spacing: 0.32em; opacity: 0.6; margin-bottom: 34px; }
+  #overlay .keys {
+    font-size: 13px; line-height: 2.1; opacity: 0.82; letter-spacing: 0.04em;
+    display: grid; grid-template-columns: auto auto; gap: 2px 22px; text-align: left;
+  }
+  #overlay .keys b { color: #9ad7ff; font-weight: 700; }
+  #overlay .enter {
+    margin-top: 34px; font-size: 15px; letter-spacing: 0.18em; opacity: 0.9;
+    border: 1px solid rgba(160,170,255,0.35); padding: 12px 26px; border-radius: 999px;
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:0.55} 50%{opacity:1} }
+  #loaderr { color:#ff8a8a; font-size:13px; margin-top:20px; max-width:520px; }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="hud">
+  <div id="stats"></div>
+  <div id="divider"></div>
+</div>
+
+<div id="overlay">
+  <h1>NUGGETFIELD</h1>
+  <div class="sub">INFINITE ORB FIELD</div>
+  <div class="keys">
+    <span><b>Mouse</b></span><span>look around</span>
+    <span><b>W&nbsp;A&nbsp;S&nbsp;D</b></span><span>thrust forward / strafe</span>
+    <span><b>Space&nbsp;/&nbsp;C</b></span><span>thrust up / down</span>
+    <span><b>Shift</b></span><span>boost</span>
+    <span><b>X</b></span><span>brake (full stop)</span>
+    <span><b>V</b></span><span>toggle Cardboard 3D (split screen)</span>
+    <span><b>Esc</b></span><span>release mouse</span>
+  </div>
+  <div class="enter">CLICK TO FLY</div>
+  <div id="loaderr"></div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { Pass } from 'three/addons/postprocessing/Pass.js';
+import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
+
+// ============================================================================
+//  CONFIG — every look/feel knob lives here.
+// ============================================================================
+const CONFIG = {
+  // Field
+  count:        2400,     // number of orbs (try 1500–5000)
+  fieldRadius:  240,      // half-size of the cube of orbs kept around the camera
+  sizeMin:      1.2,      // smallest orb radius
+  sizeMax:      11.0,     // largest orb radius
+  sizeBias:     2.0,      // >1 skews toward smaller orbs (lots of small, few big)
+
+  // Orb shape — irregular, faceted "space rocks"
+  geoDetail:     2,       // icosphere subdivisions (lower = chunkier facets)
+  shapeVariants: 12,      // number of distinct lumpy shapes shared across the field
+  noiseAmp:      0.26,    // bump height as a fraction of radius (0 = smooth sphere)
+  noiseFreq:     1.7,     // lumpiness (higher = more, smaller bumps)
+  scaleJitter:   0.30,    // per-orb non-uniform stretch (0 = uniform spheres)
+  flatFacets:    true,    // flat-shade each triangle for the faceted low-poly look
+  roughness:     0.40,
+  metalness:     0.10,
+
+  // Orb motion — gentle drift, tumbling, and elastic collisions
+  drift:          true,
+  driftSpeed:     2.2,    // max gentle drift speed (units/s)
+  spin:           true,
+  spinMin:        0.05,   // slowest tumble (rad/s)
+  spinMax:        0.80,   // fastest tumble (rad/s)
+  spinBias:       2.5,    // >1 = most orbs tumble slowly, a few spin fast
+  collisions:     true,
+  restitution:    0.92,   // bounciness (1 = perfectly elastic)
+  collisionScale: 0.92,   // collision radius as a fraction of visual radius
+  collisionGrid:  48,     // spatial-hash resolution (auto-bounded; perf knob)
+  cameraCollisions: true, // you have a body too — orbs bounce off you
+  cameraRadius:     3.0,   // your personal collision bubble (world units)
+  cameraMass:       150,   // heavier = you shove small orbs aside; big orbs still bump you
+  cameraBounce:     0.6,   // restitution for hits against you
+
+  // Palette (deep-space dark: vibrant, saturated)
+  satMin: 0.62, satMax: 1.0,
+  litMin: 0.50, litMax: 0.70,
+
+  // Movement (zero-g thrusters, momentum-preserving)
+  accel:       42,        // thrust acceleration  (units/s^2)
+  maxSpeed:    55,        // cruising speed cap    (units/s)
+  boost:       3.0,       // Shift multiplier (accel + speed cap)
+  damping:     0.0,       // 0 = true zero-g: momentum preserved until you brake (X)
+  brake:       4.0,       // extra damping while holding X (1/s)
+  lookSpeed:   0.0022,    // mouse sensitivity (rad/px)
+
+  // Atmosphere
+  fogDensity:  0.0085,    // FogExp2 — tuned so orbs fade out well before the wrap edge
+
+  // Lighting — a single "sun" so every orb shares one specular highlight (one
+  // unseen light source). The hemisphere fill adds colour to shadowed sides but
+  // produces no specular, so it never creates a competing highlight.
+  sunColor:       0xfff3e2,
+  sunIntensity:   2.3,
+  sunDir:         [0.8, 1.0, 0.6],   // direction the light comes FROM
+  fillSky:        0x6a7cff,
+  fillGround:     0x0a0a18,
+  fillIntensity:  1.0,
+
+  // Post-processing
+  bloomStrength:  0.85,
+  bloomRadius:    0.55,
+  bloomThreshold: 0.55,
+  trailMax:       0.90,   // max afterimage persistence at top speed (0 = none)
+
+  // Stereo "Google Cardboard" split-screen (toggle with V)
+  eyeSeparation:  0.9,    // world-unit gap between the eyes (bigger = stronger pop-out)
+  stereoFocus:    40,     // zero-parallax distance (nearer pops out, farther recedes)
+};
+
+// ============================================================================
+//  Renderer / scene / camera
+// ============================================================================
+const overlay = document.getElementById('overlay');
+const loaderr = document.getElementById('loaderr');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const HORIZON = new THREE.Color(0x0b0b1e);
+scene.background = HORIZON.clone();
+scene.fog = new THREE.FogExp2(HORIZON.getHex(), CONFIG.fogDensity);
+
+const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.5, 9000);
+
+// ============================================================================
+//  Backdrop: subtle vertical gradient sky-sphere (follows the camera)
+// ============================================================================
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(5000, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: {
+      top:     { value: new THREE.Color(0x0a0a26).convertSRGBToLinear() },
+      horizon: { value: new THREE.Color(0x12122e).convertSRGBToLinear() },
+      bottom:  { value: new THREE.Color(0x040408).convertSRGBToLinear() },
+    },
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
+      void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: /* glsl */`
+      varying vec3 vDir; uniform vec3 top; uniform vec3 horizon; uniform vec3 bottom;
+      void main(){
+        float h = vDir.y;
+        vec3 col = horizon;
+        col = mix(col, top,    smoothstep(0.0,  0.7, h));
+        col = mix(col, bottom, smoothstep(0.0, -0.7, h));
+        gl_FragColor = vec4(col, 1.0);
+      }`,
+  })
+);
+sky.frustumCulled = false;
+scene.add(sky);
+
+// ============================================================================
+//  Starfield: dim distant points that ride along with the camera (look infinite)
+// ============================================================================
+const STAR_COUNT = 1600;
+const starGeo = new THREE.BufferGeometry();
+{
+  const pos = new Float32Array(STAR_COUNT * 3);
+  const col = new Float32Array(STAR_COUNT * 3);
+  const c = new THREE.Color();
+  for (let i = 0; i < STAR_COUNT; i++) {
+    // random direction * large radius shell
+    const u = Math.random() * 2 - 1, t = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(1 - u * u);
+    const R = 3600 + Math.random() * 600;
+    pos[i*3+0] = Math.cos(t) * r * R;
+    pos[i*3+1] = u * R;
+    pos[i*3+2] = Math.sin(t) * r * R;
+    c.setHSL(0.55 + Math.random() * 0.12, 0.5, 0.5 + Math.random() * 0.4);
+    col[i*3+0] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  starGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+}
+const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
+  size: 2.0, sizeAttenuation: false, vertexColors: true,
+  transparent: true, opacity: 0.85, depthWrite: false, fog: false,
+}));
+stars.frustumCulled = false;
+scene.add(stars);
+
+// ============================================================================
+//  Lighting — ONE sun + ambient fill.
+//  A single directional light gives every orb a single specular highlight on the
+//  same side, selling the illusion of one powerful unseen light. The hemisphere
+//  light only adds soft ambient colour (no specular), so it never competes.
+// ============================================================================
+scene.add(new THREE.HemisphereLight(CONFIG.fillSky, CONFIG.fillGround, CONFIG.fillIntensity));
+const sun = new THREE.DirectionalLight(CONFIG.sunColor, CONFIG.sunIntensity);
+sun.position.set(CONFIG.sunDir[0], CONFIG.sunDir[1], CONFIG.sunDir[2]); // target stays at origin
+scene.add(sun);
+
+// ============================================================================
+//  The infinite orb field — a handful of noisy, faceted shape variants spread
+//  across InstancedMeshes, wrapped around the camera so the field never ends.
+// ============================================================================
+const _dummy = new THREE.Object3D();
+const _color = new THREE.Color();
+const _v = new THREE.Vector3(), _n = new THREE.Vector3();
+const HALF = CONFIG.fieldRadius, SPAN = HALF * 2;
+const perlin = new ImprovedNoise();
+
+// One irregular "space rock": displace an icosphere's vertices along their radius
+// with a few octaves of Perlin noise. flatShading (on the material) then renders
+// every triangle as its own facet -> rough, low-poly orbs.
+function makeOrbGeometry(seed) {
+  const g = new THREE.IcosahedronGeometry(1, CONFIG.geoDetail);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    _n.fromBufferAttribute(pos, i).normalize();
+    let d = 0, amp = CONFIG.noiseAmp, freq = CONFIG.noiseFreq;
+    for (let o = 0; o < 3; o++) {            // fractal octaves
+      d += amp * perlin.noise(_n.x * freq + seed, _n.y * freq + seed * 1.7, _n.z * freq + seed * 2.3);
+      amp *= 0.5; freq *= 2.1;
+    }
+    _v.copy(_n).multiplyScalar(1 + d);        // unit sphere -> lumpy radius
+    pos.setXYZ(i, _v.x, _v.y, _v.z);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+const orbMat = new THREE.MeshStandardMaterial({
+  roughness: CONFIG.roughness, metalness: CONFIG.metalness, flatShading: CONFIG.flatFacets,
+});
+
+// Spread the orbs round-robin across V distinct shapes (one InstancedMesh each).
+const V = Math.max(1, CONFIG.shapeVariants | 0);
+const counts = new Array(V).fill(0);
+for (let i = 0; i < CONFIG.count; i++) counts[i % V]++;
+const meshes = [];
+for (let v = 0; v < V; v++) {
+  const m = new THREE.InstancedMesh(makeOrbGeometry((v + 1) * 13.37), orbMat, counts[v]);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.frustumCulled = false;
+  meshes.push(m);
+  scene.add(m);
+}
+
+const positions = new Array(CONFIG.count);    // Vector3 world positions
+const velocities = new Array(CONFIG.count);   // Vector3 gentle drift
+const scales = new Array(CONFIG.count);       // Vector3 (non-uniform) scales
+const radii = new Float32Array(CONFIG.count); // collision radius
+const invMass = new Float32Array(CONFIG.count);
+const spinAxis = new Array(CONFIG.count);     // Vector3 tumble axis (any direction)
+const spinRate = new Float32Array(CONFIG.count);
+const spinAngle = new Float32Array(CONFIG.count);
+const meshOf = new Int16Array(CONFIG.count);  // which variant mesh each orb lives in
+const localOf = new Int32Array(CONFIG.count); // its index within that mesh
+
+function randScaleVec(target) {
+  const s = CONFIG.sizeMin + (CONFIG.sizeMax - CONFIG.sizeMin) * Math.pow(Math.random(), CONFIG.sizeBias);
+  const j = CONFIG.scaleJitter;
+  return target.set(
+    s * (1 + (Math.random() * 2 - 1) * j),
+    s * (1 + (Math.random() * 2 - 1) * j),
+    s * (1 + (Math.random() * 2 - 1) * j)
+  );
+}
+function randVelocity(target) {
+  if (!CONFIG.drift) return target.set(0, 0, 0);
+  target.set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1);
+  if (target.lengthSq() < 1e-6) target.set(1, 0, 0);
+  return target.normalize().multiplyScalar(CONFIG.driftSpeed * (0.25 + Math.random() * 0.75));
+}
+function randColor(target) {
+  return target.setHSL(
+    Math.random(),
+    THREE.MathUtils.lerp(CONFIG.satMin, CONFIG.satMax, Math.random()),
+    THREE.MathUtils.lerp(CONFIG.litMin, CONFIG.litMax, Math.random())
+  );
+}
+function refreshDerived(i) {                   // keep collision radius + mass in sync with scale
+  const s = scales[i];
+  radii[i] = (s.x + s.y + s.z) / 3 * CONFIG.collisionScale;
+  invMass[i] = 1 / (radii[i] * radii[i] * radii[i]); // mass ∝ volume
+}
+
+const _quat = new THREE.Quaternion();
+function composeOrb(i) {                        // build this orb's instance matrix from its current state
+  _quat.setFromAxisAngle(spinAxis[i], spinAngle[i]);
+  _dummy.position.copy(positions[i]);
+  _dummy.quaternion.copy(_quat);
+  _dummy.scale.copy(scales[i]);
+  _dummy.updateMatrix();
+  meshes[meshOf[i]].setMatrixAt(localOf[i], _dummy.matrix);
+}
+
+// seed the field uniformly inside the cube centered on the origin (camera start)
+const cursor = new Array(V).fill(0);
+for (let i = 0; i < CONFIG.count; i++) {
+  const v = i % V;
+  meshOf[i] = v; localOf[i] = cursor[v]++;
+  positions[i] = new THREE.Vector3(
+    (Math.random() * 2 - 1) * HALF,
+    (Math.random() * 2 - 1) * HALF,
+    (Math.random() * 2 - 1) * HALF
+  );
+  scales[i] = randScaleVec(new THREE.Vector3());
+  refreshDerived(i);
+  velocities[i] = randVelocity(new THREE.Vector3());
+  spinAxis[i] = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+  spinRate[i] = (CONFIG.spin ? CONFIG.spinMin + (CONFIG.spinMax - CONFIG.spinMin) * Math.pow(Math.random(), CONFIG.spinBias) : 0) * (Math.random() < 0.5 ? -1 : 1);
+  spinAngle[i] = Math.random() * 6.283;
+  composeOrb(i);
+  meshes[v].setColorAt(localOf[i], randColor(_color));
+}
+for (const m of meshes) { m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true; }
+
+// ---- gentle elastic collisions via a uniform-grid spatial hash (≈O(N)) -------
+const maxRadius = CONFIG.sizeMax * (1 + CONFIG.scaleJitter) * CONFIG.collisionScale;
+const cellSize = Math.max(1e-3, 2 * maxRadius, CONFIG.cameraRadius + maxRadius); // any colliding pair stays within one cell
+const GRID = Math.max(3, CONFIG.collisionGrid | 0);
+const GHALF = GRID >> 1;
+const cellHead = new Int32Array(GRID * GRID * GRID);
+const cellNext = new Int32Array(CONFIG.count);
+const clampCell = (n) => (n < 0 ? 0 : (n >= GRID ? GRID - 1 : n));
+
+function buildHash(camPos) {
+  cellHead.fill(-1);
+  for (let i = 0; i < CONFIG.count; i++) {       // bucket every orb (cells are relative to the camera, so bounded)
+    const p = positions[i];
+    const cx = clampCell((Math.floor((p.x - camPos.x) / cellSize)) + GHALF);
+    const cy = clampCell((Math.floor((p.y - camPos.y) / cellSize)) + GHALF);
+    const cz = clampCell((Math.floor((p.z - camPos.z) / cellSize)) + GHALF);
+    const c = (cx * GRID + cy) * GRID + cz;
+    cellNext[i] = cellHead[c]; cellHead[c] = i;
+  }
+}
+
+function collideOrbs(camPos) {
+  const e = CONFIG.restitution;
+  for (let i = 0; i < CONFIG.count; i++) {
+    const pi = positions[i], vi = velocities[i], ri = radii[i], imi = invMass[i];
+    const bx = clampCell((Math.floor((pi.x - camPos.x) / cellSize)) + GHALF);
+    const by = clampCell((Math.floor((pi.y - camPos.y) / cellSize)) + GHALF);
+    const bz = clampCell((Math.floor((pi.z - camPos.z) / cellSize)) + GHALF);
+    for (let ox = -1; ox <= 1; ox++) { const cx = bx + ox; if (cx < 0 || cx >= GRID) continue;
+      for (let oy = -1; oy <= 1; oy++) { const cy = by + oy; if (cy < 0 || cy >= GRID) continue;
+        for (let oz = -1; oz <= 1; oz++) { const cz = bz + oz; if (cz < 0 || cz >= GRID) continue;
+          let j = cellHead[(cx * GRID + cy) * GRID + cz];
+          while (j !== -1) {
+            if (j > i) {                          // resolve each pair once
+              const pj = positions[j];
+              const dx = pj.x - pi.x, dy = pj.y - pi.y, dz = pj.z - pi.z;
+              const sum = ri + radii[j];
+              const d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 < sum * sum && d2 > 1e-8) {
+                const d = Math.sqrt(d2);
+                const nx = dx / d, ny = dy / d, nz = dz / d;
+                const imj = invMass[j], totalInv = imi + imj, overlap = sum - d;
+                const sepI = overlap * (imi / totalInv), sepJ = overlap * (imj / totalInv);
+                pi.x -= nx * sepI; pi.y -= ny * sepI; pi.z -= nz * sepI;      // push apart (no overlap)
+                pj.x += nx * sepJ; pj.y += ny * sepJ; pj.z += nz * sepJ;
+                const vj = velocities[j];
+                const vn = (vj.x - vi.x) * nx + (vj.y - vi.y) * ny + (vj.z - vi.z) * nz;
+                if (vn < 0) {                       // only if approaching — elastic impulse
+                  const jimp = -(1 + e) * vn / totalInv;
+                  const ix = nx * jimp, iy = ny * jimp, iz = nz * jimp;
+                  vi.x -= ix * imi; vi.y -= iy * imi; vi.z -= iz * imi;
+                  vj.x += ix * imj; vj.y += iy * imj; vj.z += iz * imj;
+                }
+              }
+            }
+            j = cellNext[j];
+          }
+        }
+      }
+    }
+  }
+}
+
+// You are a heavy sphere in the same hash (always the centre cell, since the grid is
+// camera-relative): orbs bounce off you, and big orbs shove you back — giving them heft.
+function collideCamera(camPos, camVel) {
+  const cr = CONFIG.cameraRadius, e = CONFIG.cameraBounce;
+  const imC = 1 / Math.max(1e-3, CONFIG.cameraMass);
+  for (let ox = -1; ox <= 1; ox++) { const cx = GHALF + ox; if (cx < 0 || cx >= GRID) continue;
+    for (let oy = -1; oy <= 1; oy++) { const cy = GHALF + oy; if (cy < 0 || cy >= GRID) continue;
+      for (let oz = -1; oz <= 1; oz++) { const cz = GHALF + oz; if (cz < 0 || cz >= GRID) continue;
+        let j = cellHead[(cx * GRID + cy) * GRID + cz];
+        while (j !== -1) {
+          const pj = positions[j];
+          const dx = pj.x - camPos.x, dy = pj.y - camPos.y, dz = pj.z - camPos.z;
+          const sum = cr + radii[j];
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 < sum * sum && d2 > 1e-8) {
+            const d = Math.sqrt(d2);
+            const nx = dx / d, ny = dy / d, nz = dz / d;
+            const imj = invMass[j], totalInv = imC + imj, overlap = sum - d;
+            const sepC = overlap * (imC / totalInv), sepJ = overlap * (imj / totalInv);
+            camPos.x -= nx * sepC; camPos.y -= ny * sepC; camPos.z -= nz * sepC;  // push you out
+            pj.x += nx * sepJ; pj.y += ny * sepJ; pj.z += nz * sepJ;              // and the orb away
+            const vj = velocities[j];
+            const vn = (vj.x - camVel.x) * nx + (vj.y - camVel.y) * ny + (vj.z - camVel.z) * nz;
+            if (vn < 0) {                          // only if approaching — elastic impulse
+              const jimp = -(1 + e) * vn / totalInv;
+              const ix = nx * jimp, iy = ny * jimp, iz = nz * jimp;
+              camVel.x -= ix * imC; camVel.y -= iy * imC; camVel.z -= iz * imC;
+              vj.x += ix * imj; vj.y += iy * imj; vj.z += iz * imj;
+            }
+          }
+          j = cellNext[j];
+        }
+      }
+    }
+  }
+}
+
+// ---- per frame: drift + tumble + collide + camera-relative wrap, push matrices
+const colorDirty = new Uint8Array(V);
+function updateField(dt, camPos, camVel) {
+  for (let i = 0; i < CONFIG.count; i++) {       // integrate gentle drift + spin
+    const p = positions[i], v = velocities[i];
+    p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
+    spinAngle[i] += spinRate[i] * dt;
+  }
+  if (CONFIG.collisions || CONFIG.cameraCollisions) buildHash(camPos);
+  if (CONFIG.collisions) collideOrbs(camPos);
+  if (CONFIG.cameraCollisions) collideCamera(camPos, camVel);
+  colorDirty.fill(0);
+  for (let i = 0; i < CONFIG.count; i++) {
+    const p = positions[i];
+    let wrapped = false;
+    let d = p.x - camPos.x; if (d > HALF) { p.x -= SPAN; wrapped = true; } else if (d < -HALF) { p.x += SPAN; wrapped = true; }
+    d = p.y - camPos.y;     if (d > HALF) { p.y -= SPAN; wrapped = true; } else if (d < -HALF) { p.y += SPAN; wrapped = true; }
+    d = p.z - camPos.z;     if (d > HALF) { p.z -= SPAN; wrapped = true; } else if (d < -HALF) { p.z += SPAN; wrapped = true; }
+    if (wrapped) {                                 // recycle out in the fog: fresh size, colour, drift
+      randScaleVec(scales[i]); refreshDerived(i);
+      randVelocity(velocities[i]);
+      meshes[meshOf[i]].setColorAt(localOf[i], randColor(_color));
+      colorDirty[meshOf[i]] = 1;
+    }
+    composeOrb(i);
+  }
+  for (let v = 0; v < V; v++) {                    // matrices change every frame now; colours only on wrap
+    meshes[v].instanceMatrix.needsUpdate = true;
+    if (colorDirty[v]) meshes[v].instanceColor.needsUpdate = true;
+  }
+}
+
+// ============================================================================
+//  Post-processing: Render -> Afterimage (speed-driven) -> Bloom -> Output
+// ============================================================================
+// A render pass that draws either the mono view or a side-by-side stereo pair
+// (Google Cardboard). It sits at the head of the composer so bloom + trails still
+// apply to both eyes. needsSwap=false + rendering into readBuffer mirrors RenderPass.
+class DualViewRenderPass extends Pass {
+  constructor(scene, camera) {
+    super();
+    this.scene = scene; this.camera = camera;
+    this.clear = true; this.needsSwap = false;
+    this.stereoEnabled = false;
+    this.stereo = new THREE.StereoCamera();
+    this.stereo.aspect = 0.5;              // each eye fills half the width
+    this._size = new THREE.Vector2();
+  }
+  render(renderer, writeBuffer, readBuffer) {
+    const oldAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.setRenderTarget(this.renderToScreen ? null : readBuffer);
+    if (this.clear) renderer.clear();
+    if (!this.stereoEnabled) {
+      renderer.render(this.scene, this.camera);
+    } else {
+      this.camera.focus = CONFIG.stereoFocus;
+      this.stereo.eyeSep = CONFIG.eyeSeparation;
+      this.camera.updateWorldMatrix(true, false);
+      this.stereo.update(this.camera);
+      // Work in logical (CSS) px: setViewport/setScissor apply the pixel ratio themselves,
+      // so using the render target's physical width here would double-count it (off-centre split).
+      renderer.getSize(this._size);
+      const w = this._size.x, h = this._size.y;
+      const half = Math.floor(w / 2);
+      renderer.setScissorTest(true);
+      renderer.setScissor(0, 0, half, h);        renderer.setViewport(0, 0, half, h);
+      renderer.render(this.scene, this.stereo.cameraL);
+      renderer.setScissor(half, 0, w - half, h); renderer.setViewport(half, 0, w - half, h);
+      renderer.render(this.scene, this.stereo.cameraR);
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, w, h);
+    }
+    renderer.autoClear = oldAutoClear;
+  }
+}
+
+const composer = new EffectComposer(renderer);
+const scenePass = new DualViewRenderPass(scene, camera);
+composer.addPass(scenePass);
+// the thin centre line between the eyes (shown only in stereo); helps line up a holder
+const divider = document.getElementById('divider');
+function setStereo(on) { scenePass.stereoEnabled = on; divider.style.display = on ? 'block' : 'none'; }
+// open with ?stereo (or ?cardboard) to start directly in split-screen 3D — handy on a phone
+setStereo(/stereo|cardboard|vr/i.test(location.search + location.hash));
+const afterimage = new AfterimagePass();
+afterimage.uniforms['damp'].value = 0.0;
+composer.addPass(afterimage);
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  CONFIG.bloomStrength, CONFIG.bloomRadius, CONFIG.bloomThreshold
+);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// ============================================================================
+//  Controls — pointer-lock look + momentum WASD thrusters
+// ============================================================================
+const keys = Object.create(null);
+let locked = false;
+let yaw = 0, pitch = 0;
+const maxPitch = Math.PI / 2 - 0.05;
+const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
+const velocity = new THREE.Vector3();
+const worldUp = new THREE.Vector3(0, 1, 0);
+const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _thrust = new THREE.Vector3();
+
+function applyLook() {
+  _euler.set(pitch, yaw, 0);
+  camera.quaternion.setFromEuler(_euler);
+}
+applyLook();
+
+addEventListener('mousemove', (e) => {
+  if (!locked) return;
+  yaw   -= e.movementX * CONFIG.lookSpeed;
+  pitch -= e.movementY * CONFIG.lookSpeed;
+  pitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
+  applyLook();
+});
+
+addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'KeyV') setStereo(!scenePass.stereoEnabled);
+});
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+overlay.addEventListener('click', () => {
+  const p = renderer.domElement.requestPointerLock?.();
+  if (p && p.catch) p.catch(() => {});
+});
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === renderer.domElement;
+  overlay.classList.toggle('hidden', locked);
+});
+
+function updateMovement(dt) {
+  _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  _thrust.set(0, 0, 0);
+  if (locked) {
+    if (keys['KeyW']) _thrust.add(_fwd);
+    if (keys['KeyS']) _thrust.sub(_fwd);
+    if (keys['KeyD']) _thrust.add(_right);
+    if (keys['KeyA']) _thrust.sub(_right);
+    if (keys['Space']) _thrust.add(worldUp);
+    if (keys['KeyC']) _thrust.sub(worldUp);
+  }
+  const boosting = keys['ShiftLeft'] || keys['ShiftRight'];
+  const boost = boosting ? CONFIG.boost : 1;
+  if (_thrust.lengthSq() > 0) {
+    _thrust.normalize();
+    velocity.addScaledVector(_thrust, CONFIG.accel * boost * dt);
+  }
+  // true zero-g: no passive damping (CONFIG.damping = 0). X applies a strong brake.
+  const damp = CONFIG.damping + (keys['KeyX'] ? CONFIG.brake : 0);
+  if (damp > 0) velocity.multiplyScalar(Math.exp(-damp * dt));
+  // speed cap
+  const cap = CONFIG.maxSpeed * boost;
+  if (velocity.lengthSq() > cap * cap) velocity.setLength(cap);
+  camera.position.addScaledVector(velocity, dt);
+}
+
+// ============================================================================
+//  Resize
+// ============================================================================
+addEventListener('resize', () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+  composer.setSize(w, h);
+});
+
+// ============================================================================
+//  Main loop
+// ============================================================================
+const clock = new THREE.Clock();
+const stats = document.getElementById('stats');
+let fps = 60, statTimer = 0;
+const trailRef = CONFIG.maxSpeed * 1.2; // speed at which trails reach trailMax
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  updateMovement(dt);
+  updateField(dt, camera.position, velocity);
+
+  // backdrop + stars ride along so they read as infinitely distant
+  sky.position.copy(camera.position);
+  stars.position.copy(camera.position);
+
+  // motion-blur trails scale with current speed
+  const speed = velocity.length();
+  afterimage.uniforms['damp'].value = Math.min(speed / trailRef, 1) * CONFIG.trailMax;
+
+  composer.render();
+
+  // HUD (throttled)
+  statTimer += dt;
+  fps += ((1 / Math.max(dt, 1e-3)) - fps) * 0.1;
+  if (statTimer > 0.12) {
+    statTimer = 0;
+    stats.textContent =
+      `SPEED  ${speed.toFixed(0).padStart(3)} u/s` +
+      `${(keys['ShiftLeft']||keys['ShiftRight']) ? '  ⟫BOOST' : ''}\n` +
+      `FPS    ${fps.toFixed(0).padStart(3)}` +
+      `${scenePass.stereoEnabled ? '   ◐ 3D' : ''}`;
+  }
+}
+
+// Surface a friendly hint if the CDN modules fail to load (e.g. opened via file://)
+window.addEventListener('error', (e) => {
+  if (String(e.message || '').includes('import') || String(e.filename || '').includes('cdn')) {
+    loaderr.textContent = 'Could not load Three.js from the CDN. Serve this folder over http (e.g. `npx serve .`) and check your connection.';
+  }
+});
+
+animate();
+</script>
+</body>
+</html>
