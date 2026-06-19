@@ -36,9 +36,11 @@ nicer but not required.
 | **A / D** | strafe left / right |
 | **Space / C** | thrust up / down (relative to your view) |
 | **Q / E** | roll thrusters - anti-clockwise / clockwise (zero-g: spin persists) |
+| **R** | level the horizon (hold) - rolls you upright if free-look has left you tilted/inverted |
 | **Shift** | boost (hold) |
 | **X** | brake - kill all motion *and* spin |
 | **V** | toggle Google-Cardboard split-screen 3D |
+| **O** | open the live-tweak panel (↑↓ pick a knob · ←→ adjust · ⌫ reset) |
 | **Esc** | release the mouse |
 | **Phone: move the device** | look around (gyroscope "move to look") |
 | **Phone: on-screen buttons** | FWD / REV, strafe, up / down, BOOST, STOP, 3D, fullscreen |
@@ -52,7 +54,7 @@ Bring your own downtempo. 🎧
 
 ## How the "infinite" field works
 
-The ~2,400 orbs are kept inside a cube centred on the camera. Each frame, any orb that
+The ~4,000 orbs are kept inside a cube centred on the camera. Each frame, any orb that
 drifts out one face of the cube is wrapped to the opposite face (and handed a fresh size +
 colour). Exponential fog hides the wrap edge, so you can
 thrust in any direction forever and never reach a boundary. It's cheap and genuinely endless
@@ -124,13 +126,31 @@ it starts, so just turn your body to choose "forward".
 
 ## Tuning
 
+### Live, in-app (press **O**)
+
+Most of the main knobs are adjustable at runtime without editing code: press **O** for a
+**live-tweak panel**, **↑/↓** to pick a knob, **←/→** to adjust it (hold to ramp), and
+**⌫ Backspace** to reset that knob to its default. Lighting, fog, bloom, exposure, material,
+speed, look sensitivity and the motion toggles apply *instantly*; the field-shape knobs
+(**orb count**, **draw distance**, min/max size, lumpiness, shape variety) trigger a quick
+rebuild of the field around you (the main loop coalesces rapid edits to one rebuild per frame).
+Great for dialing in a look before baking the values into `CONFIG`.
+
+For a more open, expansive feel, raise **draw distance** (`fieldRadius`) and *lower* the fog
+together (lighter fog = see further). They're linked: keep `fogDensity ≳ 2 / fieldRadius` so
+the fog still buries the wrap edge — otherwise you'll see orbs pop in at the field boundary.
+A bigger field at the same orb count is sparser; nudge **orb count** up to refill it (watch
+the FPS readout — `rAF` is capped at your monitor's refresh, so a steady 60 means headroom).
+
+### In the source
+
 Every look/feel value lives in the `CONFIG` object at the top of the `<script>` in
 [`index.html`](index.html). A few worth a knob-twiddle:
 
 | Key | What it does |
 | --- | --- |
-| `count` | number of orbs (1500–5000) - main perf lever |
-| `fieldRadius` | how far the field extends around you |
+| `count` | number of orbs (1500–6000) - main perf/density lever |
+| `fieldRadius` | draw distance - how far the field extends around you (pair with `fogDensity`) |
 | `sizeMin` / `sizeMax` / `sizeBias` | orb size range and small-vs-large skew |
 | `noiseAmp` / `noiseFreq` | how lumpy/irregular the rocks are (0 amp = smooth) |
 | `geoDetail` / `shapeVariants` / `scaleJitter` | facet coarseness, shape variety, non-uniform stretch |
@@ -146,7 +166,7 @@ Every look/feel value lives in the `CONFIG` object at the top of the `<script>` 
 | `lookSpeed` | mouse-look sensitivity (rad/px) |
 | `rollAccel` / `maxRoll` | Q/E roll-thruster angular acceleration (rad/s²) and spin-rate cap (rad/s) |
 | `fogDensity` | how quickly orbs fade into the void (keep ≳ the wrap edge hidden) |
-| `bloomStrength/Radius/Threshold`, `trailMax` | glow + motion-blur intensity |
+| `bloomStrength/Radius/Threshold`, `trailMax` | glow + speed motion-blur intensity (`trailMax: 0` = no trails) |
 | `eyeSeparation` / `stereoFocus` | Cardboard 3D depth strength and zero-parallax distance |
 
 If you bump `count` or `sizeMax` a lot, you may also want to nudge `fieldRadius` /

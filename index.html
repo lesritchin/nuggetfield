@@ -104,6 +104,23 @@
     position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom));
     display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none;
   }
+
+  /* ---------- Live-tweak panel (press O) ---------- */
+  #tweak {
+    position: fixed; left: 14px; top: 14px; z-index: 12; display: none; width: 250px;
+    max-height: 86vh; overflow-y: auto; pointer-events: none;
+    font-family: "SFMono-Regular", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+    font-size: 12px; line-height: 1.5; color: #aab6ff;
+    background: rgba(10,10,26,0.62); backdrop-filter: blur(4px);
+    border: 1px solid rgba(160,170,255,0.22); border-radius: 10px; padding: 8px 10px;
+    text-shadow: 0 0 8px rgba(80,90,200,0.5);
+  }
+  #tweak.show { display: block; }
+  #tweak .th { font-size: 11px; letter-spacing: 0.12em; color: #9ad7ff; margin-bottom: 6px; }
+  #tweak .th span { display: block; font-size: 9.5px; opacity: 0.6; letter-spacing: 0.02em; margin-top: 2px; color: #aab6ff; }
+  #tweak .tr { display: flex; justify-content: space-between; gap: 14px; padding: 1px 4px; border-radius: 5px; white-space: nowrap; }
+  #tweak .tr.sel { background: rgba(90,110,255,0.30); color: #fff; }
+  #tweak .tr span:last-child { opacity: 0.92; }
 </style>
 
 <script type="importmap">
@@ -130,9 +147,11 @@
     <span><b>W&nbsp;A&nbsp;S&nbsp;D</b></span><span>thrust forward / strafe</span>
     <span><b>Space&nbsp;/&nbsp;C</b></span><span>thrust up / down</span>
     <span><b>Q&nbsp;/&nbsp;E</b></span><span>roll thrusters — anti-clockwise / clockwise (zero-g spin)</span>
+    <span><b>R</b></span><span>level the horizon (hold) — straighten up if disoriented</span>
     <span><b>Shift</b></span><span>boost</span>
     <span><b>X</b></span><span>brake — stop motion &amp; spin</span>
     <span><b>V</b></span><span>toggle Cardboard 3D (split screen)</span>
+    <span><b>O</b></span><span>live-tweak panel (↑↓ pick · ←→ adjust)</span>
     <span><b>Esc</b></span><span>release mouse</span>
     <span><b>Phone</b></span><span>move to look · on-screen buttons to fly · hold to gaze-fly</span>
   </div>
@@ -174,8 +193,8 @@ import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
 // ============================================================================
 const CONFIG = {
   // Field
-  count:        2400,     // number of orbs (try 1500–5000)
-  fieldRadius:  240,      // half-size of the cube of orbs kept around the camera
+  count:        4000,     // number of orbs (try 1500–6000)
+  fieldRadius:  460,      // half-size of the cube of orbs kept around the camera (draw distance)
   sizeMin:      1.2,      // smallest orb radius
   sizeMax:      11.0,     // largest orb radius
   sizeBias:     2.0,      // >1 skews toward smaller orbs (lots of small, few big)
@@ -221,28 +240,31 @@ const CONFIG = {
   maxRoll:     3.2,       // max spin rate cap (rad/s)
 
   // Atmosphere
-  fogDensity:  0.0085,    // FogExp2 — tuned so orbs fade out well before the wrap edge
+  fogDensity:  0.0046,    // FogExp2 — lighter = see further; keep ≳ 2/fieldRadius so the wrap edge stays hidden
 
   // Lighting — a single "sun" so every orb shares one specular highlight (one
   // unseen light source). The hemisphere fill adds colour to shadowed sides but
   // produces no specular, so it never creates a competing highlight.
   sunColor:       0xfff3e2,
-  sunIntensity:   2.3,
+  sunIntensity:   1.7,
   sunDir:         [0.8, 1.0, 0.6],   // direction the light comes FROM
   fillSky:        0x6a7cff,
   fillGround:     0x0a0a18,
   fillIntensity:  1.0,
 
   // Post-processing
-  bloomStrength:  0.85,
+  exposure:       1.1,    // ACES tone-mapping exposure
+  bloomStrength:  0.55,
   bloomRadius:    0.55,
   bloomThreshold: 0.55,
-  trailMax:       0.90,   // max afterimage persistence at top speed (0 = none)
+  trailMax:       0.0,    // afterimage persistence at top speed (0 = no motion-blur trails)
 
   // Stereo "Google Cardboard" split-screen (toggle with V)
   eyeSeparation:  0.9,    // world-unit gap between the eyes (bigger = stronger pop-out)
   stereoFocus:    40,     // zero-parallax distance (nearer pops out, farther recedes)
 };
+// pristine copy so the live-tweak panel can reset a knob to its starting value
+const DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
 
 // ============================================================================
 //  Renderer / scene / camera
@@ -254,7 +276,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = CONFIG.exposure;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -329,7 +351,8 @@ scene.add(stars);
 //  same side, selling the illusion of one powerful unseen light. The hemisphere
 //  light only adds soft ambient colour (no specular), so it never competes.
 // ============================================================================
-scene.add(new THREE.HemisphereLight(CONFIG.fillSky, CONFIG.fillGround, CONFIG.fillIntensity));
+const hemi = new THREE.HemisphereLight(CONFIG.fillSky, CONFIG.fillGround, CONFIG.fillIntensity);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(CONFIG.sunColor, CONFIG.sunIntensity);
 sun.position.set(CONFIG.sunDir[0], CONFIG.sunDir[1], CONFIG.sunDir[2]); // target stays at origin
 scene.add(sun);
@@ -341,7 +364,7 @@ scene.add(sun);
 const _dummy = new THREE.Object3D();
 const _color = new THREE.Color();
 const _v = new THREE.Vector3(), _n = new THREE.Vector3();
-const HALF = CONFIG.fieldRadius, SPAN = HALF * 2;
+let HALF = CONFIG.fieldRadius, SPAN = HALF * 2; // (re)set by buildField so fieldRadius is tunable
 const perlin = new ImprovedNoise();
 
 // One irregular "space rock": displace an icosphere's vertices along their radius
@@ -368,32 +391,17 @@ const orbMat = new THREE.MeshStandardMaterial({
   roughness: CONFIG.roughness, metalness: CONFIG.metalness, flatShading: CONFIG.flatFacets,
 });
 
-// Spread the orbs round-robin across V distinct shapes (one InstancedMesh each).
-const V = Math.max(1, CONFIG.shapeVariants | 0);
-const counts = new Array(V).fill(0);
-for (let i = 0; i < CONFIG.count; i++) counts[i % V]++;
-const meshes = [];
-for (let v = 0; v < V; v++) {
-  const m = new THREE.InstancedMesh(makeOrbGeometry((v + 1) * 13.37), orbMat, counts[v]);
-  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  m.frustumCulled = false;
-  meshes.push(m);
-  scene.add(m);
-}
-
-const positions = new Array(CONFIG.count);    // Vector3 world positions
-const velocities = new Array(CONFIG.count);   // Vector3 gentle drift
-const scales = new Array(CONFIG.count);       // Vector3 (non-uniform) scales
-const radii = new Float32Array(CONFIG.count); // collision radius
-const invMass = new Float32Array(CONFIG.count);
-const spinAxis = new Array(CONFIG.count);     // Vector3 tumble axis (any direction)
-const spinRate = new Float32Array(CONFIG.count);
-const spinAngle = new Float32Array(CONFIG.count);
-const meshOf = new Int16Array(CONFIG.count);  // which variant mesh each orb lives in
-const localOf = new Int32Array(CONFIG.count); // its index within that mesh
+// ---- orb-field state: all rebuilt by buildField() when count / shape knobs change ----
+// (let, not const, so the live-tweak panel can swap them out for a fresh field)
+let V = 1, counts = [], meshes = [];
+let positions = [], velocities = [], scales = [], spinAxis = [];
+let radii, invMass, spinRate, spinAngle, meshOf, localOf, colorDirty;
+let cellSize = 1, GRID = 3, GHALF = 1, cellHead, cellNext;   // camera-relative collision hash
+const _quat = new THREE.Quaternion();
 
 function randScaleVec(target) {
-  const s = CONFIG.sizeMin + (CONFIG.sizeMax - CONFIG.sizeMin) * Math.pow(Math.random(), CONFIG.sizeBias);
+  const lo = Math.min(CONFIG.sizeMin, CONFIG.sizeMax), hi = Math.max(CONFIG.sizeMin, CONFIG.sizeMax);
+  const s = lo + (hi - lo) * Math.pow(Math.random(), CONFIG.sizeBias);
   const j = CONFIG.scaleJitter;
   return target.set(
     s * (1 + (Math.random() * 2 - 1) * j),
@@ -414,13 +422,15 @@ function randColor(target) {
     THREE.MathUtils.lerp(CONFIG.litMin, CONFIG.litMax, Math.random())
   );
 }
+function randSpin() {
+  return (CONFIG.spin ? CONFIG.spinMin + (CONFIG.spinMax - CONFIG.spinMin) * Math.pow(Math.random(), CONFIG.spinBias) : 0)
+    * (Math.random() < 0.5 ? -1 : 1);
+}
 function refreshDerived(i) {                   // keep collision radius + mass in sync with scale
   const s = scales[i];
   radii[i] = (s.x + s.y + s.z) / 3 * CONFIG.collisionScale;
   invMass[i] = 1 / (radii[i] * radii[i] * radii[i]); // mass ∝ volume
 }
-
-const _quat = new THREE.Quaternion();
 function composeOrb(i) {                        // build this orb's instance matrix from its current state
   _quat.setFromAxisAngle(spinAxis[i], spinAngle[i]);
   _dummy.position.copy(positions[i]);
@@ -429,36 +439,71 @@ function composeOrb(i) {                        // build this orb's instance mat
   _dummy.updateMatrix();
   meshes[meshOf[i]].setMatrixAt(localOf[i], _dummy.matrix);
 }
-
-// seed the field uniformly inside the cube centered on the origin (camera start)
-const cursor = new Array(V).fill(0);
-for (let i = 0; i < CONFIG.count; i++) {
-  const v = i % V;
-  meshOf[i] = v; localOf[i] = cursor[v]++;
-  positions[i] = new THREE.Vector3(
-    (Math.random() * 2 - 1) * HALF,
-    (Math.random() * 2 - 1) * HALF,
-    (Math.random() * 2 - 1) * HALF
-  );
-  scales[i] = randScaleVec(new THREE.Vector3());
-  refreshDerived(i);
-  velocities[i] = randVelocity(new THREE.Vector3());
-  spinAxis[i] = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
-  spinRate[i] = (CONFIG.spin ? CONFIG.spinMin + (CONFIG.spinMax - CONFIG.spinMin) * Math.pow(Math.random(), CONFIG.spinBias) : 0) * (Math.random() < 0.5 ? -1 : 1);
-  spinAngle[i] = Math.random() * 6.283;
-  composeOrb(i);
-  meshes[v].setColorAt(localOf[i], randColor(_color));
-}
-for (const m of meshes) { m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true; }
-
-// ---- gentle elastic collisions via a uniform-grid spatial hash (≈O(N)) -------
-const maxRadius = CONFIG.sizeMax * (1 + CONFIG.scaleJitter) * CONFIG.collisionScale;
-const cellSize = Math.max(1e-3, 2 * maxRadius, CONFIG.cameraRadius + maxRadius); // any colliding pair stays within one cell
-const GRID = Math.max(3, CONFIG.collisionGrid | 0);
-const GHALF = GRID >> 1;
-const cellHead = new Int32Array(GRID * GRID * GRID);
-const cellNext = new Int32Array(CONFIG.count);
 const clampCell = (n) => (n < 0 ? 0 : (n >= GRID ? GRID - 1 : n));
+
+// Tear down the current field's meshes (geometry differs per variant; orbMat is shared & kept).
+function disposeField() {
+  for (const m of meshes) { scene.remove(m); m.geometry.dispose(); m.dispose(); }
+  meshes = [];
+}
+
+// (Re)build the whole field from CONFIG — call after changing count / sizes / shape knobs.
+function buildField() {
+  disposeField();
+  HALF = Math.max(20, CONFIG.fieldRadius); SPAN = HALF * 2; // field extent (and wrap distance)
+  V = Math.max(1, CONFIG.shapeVariants | 0);
+  const N = Math.max(1, Math.round(CONFIG.count));
+  CONFIG.count = N;
+  // round-robin the orbs across V distinct noisy shapes (one InstancedMesh each)
+  counts = new Array(V).fill(0);
+  for (let i = 0; i < N; i++) counts[i % V]++;
+  for (let v = 0; v < V; v++) {
+    const m = new THREE.InstancedMesh(makeOrbGeometry((v + 1) * 13.37), orbMat, counts[v]);
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.frustumCulled = false;
+    meshes.push(m); scene.add(m);
+  }
+  positions = new Array(N); velocities = new Array(N); scales = new Array(N);
+  radii = new Float32Array(N); invMass = new Float32Array(N);
+  spinAxis = new Array(N); spinRate = new Float32Array(N); spinAngle = new Float32Array(N);
+  meshOf = new Int16Array(N); localOf = new Int32Array(N);
+  colorDirty = new Uint8Array(V);
+  // seed the field uniformly inside the cube centered on the origin (camera start)
+  const cursor = new Array(V).fill(0);
+  for (let i = 0; i < N; i++) {
+    const v = i % V;
+    meshOf[i] = v; localOf[i] = cursor[v]++;
+    positions[i] = new THREE.Vector3(   // cube centred on the camera (origin at startup)
+      camera.position.x + (Math.random() * 2 - 1) * HALF,
+      camera.position.y + (Math.random() * 2 - 1) * HALF,
+      camera.position.z + (Math.random() * 2 - 1) * HALF
+    );
+    scales[i] = randScaleVec(new THREE.Vector3());
+    refreshDerived(i);
+    velocities[i] = randVelocity(new THREE.Vector3());
+    spinAxis[i] = new THREE.Vector3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1).normalize();
+    spinRate[i] = randSpin();
+    spinAngle[i] = Math.random() * 6.283;
+    composeOrb(i);
+    meshes[v].setColorAt(localOf[i], randColor(_color));
+  }
+  for (const m of meshes) { m.instanceMatrix.needsUpdate = true; m.instanceColor.needsUpdate = true; }
+  // size the camera-relative collision hash so any colliding pair stays within one cell, and
+  // so the grid spans the whole field (otherwise distant orbs pile into clamped edge cells).
+  const maxRadius = CONFIG.sizeMax * (1 + CONFIG.scaleJitter) * CONFIG.collisionScale;
+  cellSize = Math.max(1e-3, 2 * maxRadius, CONFIG.cameraRadius + maxRadius);
+  GRID = Math.min(96, Math.max(3, CONFIG.collisionGrid | 0, Math.ceil(SPAN / cellSize) + 1));
+  GHALF = GRID >> 1;
+  cellHead = new Int32Array(GRID * GRID * GRID);
+  cellNext = new Int32Array(N);
+}
+
+// Re-roll drift + tumble in place for every orb (cheap; for live drift/spin tweaks, no rebuild).
+function applyMotion() {
+  for (let i = 0; i < CONFIG.count; i++) { randVelocity(velocities[i]); spinRate[i] = randSpin(); }
+}
+
+buildField();
 
 function buildHash(camPos) {
   cellHead.fill(-1);
@@ -552,7 +597,6 @@ function collideCamera(camPos, camVel) {
 }
 
 // ---- per frame: drift + tumble + collide + camera-relative wrap, push matrices
-const colorDirty = new Uint8Array(V);
 function updateField(dt, camPos, camVel) {
   for (let i = 0; i < CONFIG.count; i++) {       // integrate gentle drift + spin
     const p = positions[i], v = velocities[i];
@@ -651,20 +695,105 @@ composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
 // ============================================================================
+//  Live-tweak panel — surface the main CONFIG knobs as runtime keyboard controls.
+//  O = open/close · ↑/↓ pick a knob · ←/→ adjust (hold to ramp) · ⌫ reset that knob.
+//  Cheap knobs apply instantly; field-shape knobs (count, sizes, lumpiness, variety)
+//  flag a rebuild that the main loop coalesces to one rebuild per frame.
+// ============================================================================
+let needsRebuild = false;
+const TWEAKS = [
+  { k:'count',          label:'Orb count',       min:200,    max:6000,  step:200,    int:true, rebuild:true },
+  { k:'fieldRadius',    label:'Draw distance',   min:120,    max:1200,  step:20,     int:true, rebuild:true },
+  { k:'sizeMax',        label:'Orb size · max',  min:2,      max:30,    step:1,                rebuild:true },
+  { k:'sizeMin',        label:'Orb size · min',  min:0.2,    max:12,    step:0.2,              rebuild:true },
+  { k:'noiseAmp',       label:'Lumpiness',       min:0,      max:0.8,   step:0.02,             rebuild:true },
+  { k:'shapeVariants',  label:'Shape variety',   min:1,      max:24,    step:1,      int:true, rebuild:true },
+  { k:'flatFacets',     label:'Flat facets',     bool:true, apply:()=>{ orbMat.flatShading = CONFIG.flatFacets; orbMat.needsUpdate = true; } },
+  { k:'roughness',      label:'Roughness',       min:0,      max:1,     step:0.05,   apply:()=>{ orbMat.roughness = CONFIG.roughness; } },
+  { k:'metalness',      label:'Metalness',       min:0,      max:1,     step:0.05,   apply:()=>{ orbMat.metalness = CONFIG.metalness; } },
+  { k:'sunIntensity',   label:'Sun intensity',   min:0,      max:6,     step:0.1,    apply:()=>{ sun.intensity = CONFIG.sunIntensity; } },
+  { k:'fillIntensity',  label:'Fill light',      min:0,      max:4,     step:0.1,    apply:()=>{ hemi.intensity = CONFIG.fillIntensity; } },
+  { k:'exposure',       label:'Exposure',        min:0.2,    max:3,     step:0.05,   apply:()=>{ renderer.toneMappingExposure = CONFIG.exposure; } },
+  { k:'fogDensity',     label:'Fog density',     min:0,      max:0.03,  step:0.0005, apply:()=>{ scene.fog.density = CONFIG.fogDensity; } },
+  { k:'bloomStrength',  label:'Bloom strength',  min:0,      max:3,     step:0.05,   apply:()=>{ bloom.strength = CONFIG.bloomStrength; } },
+  { k:'bloomRadius',    label:'Bloom radius',    min:0,      max:1.5,   step:0.05,   apply:()=>{ bloom.radius = CONFIG.bloomRadius; } },
+  { k:'bloomThreshold', label:'Bloom threshold', min:0,      max:1,     step:0.02,   apply:()=>{ bloom.threshold = CONFIG.bloomThreshold; } },
+  { k:'trailMax',       label:'Motion trails',   min:0,      max:0.98,  step:0.02 },
+  { k:'maxSpeed',       label:'Max speed',       min:5,      max:200,   step:5 },
+  { k:'accel',          label:'Thrust accel',    min:5,      max:200,   step:2 },
+  { k:'lookSpeed',      label:'Look speed',      min:0.0005, max:0.006, step:0.0002 },
+  { k:'drift',          label:'Drift',           bool:true, apply:applyMotion },
+  { k:'driftSpeed',     label:'Drift speed',     min:0,      max:10,    step:0.2,    apply:applyMotion },
+  { k:'spin',           label:'Tumble',          bool:true, apply:applyMotion },
+  { k:'spinMax',        label:'Tumble rate',     min:0,      max:3,     step:0.1,    apply:applyMotion },
+  { k:'collisions',     label:'Orb collisions',  bool:true },
+  { k:'cameraCollisions', label:'You collide',   bool:true },
+  { k:'eyeSeparation',  label:'3D eye-sep',      min:0,      max:3,     step:0.05 },
+];
+
+const panel = document.createElement('div');
+panel.id = 'tweak';
+document.getElementById('hud').appendChild(panel);
+let panelOpen = false, sel = 0;
+
+const fmtVal = (v) => typeof v === 'boolean' ? (v ? 'ON' : 'OFF')
+  : Number.isInteger(v) ? String(v)
+  : (Math.abs(v) < 0.01 && v !== 0) ? v.toFixed(4) : v.toFixed(2);
+
+function renderPanel() {
+  if (!panelOpen) return;
+  let html = '<div class="th">TWEAKS<span>↑↓ pick &nbsp;·&nbsp; ←→ adjust &nbsp;·&nbsp; ⌫ reset &nbsp;·&nbsp; O close</span></div>';
+  for (let i = 0; i < TWEAKS.length; i++) {
+    const t = TWEAKS[i];
+    html += `<div class="tr${i === sel ? ' sel' : ''}"><span>${i === sel ? '▸ ' : '&nbsp;&nbsp;'}${t.label}</span><span>${fmtVal(CONFIG[t.k])}</span></div>`;
+  }
+  panel.innerHTML = html;
+  panel.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+}
+function applyTweak(t) { if (t.rebuild) needsRebuild = true; else t.apply?.(); }
+function adjustSel(dir) {
+  const t = TWEAKS[sel];
+  if (t.bool) {
+    CONFIG[t.k] = dir > 0;                                   // ← = OFF, → = ON
+  } else {
+    let v = CONFIG[t.k] + dir * t.step;
+    v = Math.max(t.min, Math.min(t.max, v));
+    CONFIG[t.k] = t.int ? Math.round(v) : Math.round(v * 1e6) / 1e6; // trim float drift
+  }
+  applyTweak(t); renderPanel();
+}
+function resetSel() { const t = TWEAKS[sel]; CONFIG[t.k] = DEFAULTS[t.k]; applyTweak(t); renderPanel(); }
+
+addEventListener('keydown', (e) => {
+  if (e.code === 'KeyO') { panelOpen = !panelOpen; panel.classList.toggle('show', panelOpen); renderPanel(); e.preventDefault(); return; }
+  if (!panelOpen) return;
+  switch (e.code) {
+    case 'ArrowUp':    sel = (sel - 1 + TWEAKS.length) % TWEAKS.length; renderPanel(); e.preventDefault(); break;
+    case 'ArrowDown':  sel = (sel + 1) % TWEAKS.length;                 renderPanel(); e.preventDefault(); break;
+    case 'ArrowLeft':  adjustSel(-1); e.preventDefault(); break;
+    case 'ArrowRight': adjustSel(+1); e.preventDefault(); break;
+    case 'Backspace':  resetSel();    e.preventDefault(); break;
+    case 'Escape':     panelOpen = false; panel.classList.remove('show'); break; // Esc also frees the mouse
+  }
+});
+
+// ============================================================================
 //  Controls — pointer-lock look + momentum WASD thrusters
 // ============================================================================
 const keys = Object.create(null);
 let locked = false;
 const velocity = new THREE.Vector3();
-let rollVel = 0; // angular velocity about the local forward axis (rad/s) — zero-g, persists
+let rollVel = 0; // angular velocity about the view axis (rad/s) — zero-g, persists
 const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _up = new THREE.Vector3(), _thrust = new THREE.Vector3();
 
-// True 6DOF orientation: the camera quaternion is the single source of truth.
-// Every look/roll input is an incremental rotation about a *local* axis, so there
-// are no poles to get stuck at — you can loop straight over the top or barrel-roll.
-const _AXIS_X = new THREE.Vector3(1, 0, 0); // pitch axis (local right)
-const _AXIS_Y = new THREE.Vector3(0, 1, 0); // yaw axis   (local up)
-const _AXIS_Z = new THREE.Vector3(0, 0, 1); // roll axis  (local back)
+// True 6DOF / spaceship orientation: the camera quaternion IS the state, and every
+// look/roll input is an incremental rotation about a *local* axis. There are no poles,
+// and the controls stay consistent even upside-down (mouse-up always pitches toward the
+// top of your view, mouse-left always yaws to your left). Yaw+pitch loops slowly build
+// up roll over time — that's inherent to free flight; hold R to roll back to level.
+const _AXIS_X = new THREE.Vector3(1, 0, 0); // local right (pitch axis)
+const _AXIS_Y = new THREE.Vector3(0, 1, 0); // local up    (yaw axis)
+const _AXIS_Z = new THREE.Vector3(0, 0, 1); // local back  (roll axis)
 const _rotQ = new THREE.Quaternion();
 function rotateLocal(axis, angle) {
   if (!angle) return;
@@ -672,11 +801,41 @@ function rotateLocal(axis, angle) {
   camera.quaternion.multiply(_rotQ).normalize(); // post-multiply = rotate in local space
 }
 
+// Horizon re-level: roll about the view axis until "up" is as close to world-up as it
+// can be (forward unchanged). Undefined when looking near-straight up/down, so skip there.
+const _levelM = new THREE.Matrix4();
+const _levelQ = new THREE.Quaternion();
+const _lookDir = new THREE.Vector3();
+const _ORIGIN = new THREE.Vector3(0, 0, 0);
+const _WUP = new THREE.Vector3(0, 1, 0);
+function levelHorizon(dt) {
+  _lookDir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  if (Math.abs(_lookDir.y) > 0.985) return;      // too close to vertical to define a horizon
+  _levelM.lookAt(_ORIGIN, _lookDir, _WUP);        // camera-convention: forward stays, up → world-up
+  _levelQ.setFromRotationMatrix(_levelM);
+  camera.quaternion.slerp(_levelQ, Math.min(1, dt * 6)).normalize();
+}
+
+// Pointer-Lock spike rejection. Chromium (especially on Windows) intermittently reports a
+// single mousemove delta vastly larger than the actual hand motion — one bogus ~260px event
+// among ~5px events whips the whole view to a random angle. We drop only TRUE outliers: a
+// delta beyond any plausible flick AND far above your own recent speed. The generous floor
+// means every realistic movement passes untouched (no lag), and accepted movement past a
+// soft knee is gently tapered so hard/quick flicks feel smooth instead of abrupt.
+let _emaMove = 0;                 // smoothed recent per-event mouse magnitude (px)
+const LOOK_KNEE = 50;             // px: full 1:1 below here
+const LOOK_GAIN = 0.5;            // sensitivity kept for the part of a move above the knee
+const softCap = (v) => { const a = Math.abs(v); return a <= LOOK_KNEE ? v : Math.sign(v) * (LOOK_KNEE + (a - LOOK_KNEE) * LOOK_GAIN); };
 addEventListener('mousemove', (e) => {
   if (gyroLook) return;          // on a phone the gyroscope owns the look
   if (!locked) return;
-  rotateLocal(_AXIS_Y, -e.movementX * CONFIG.lookSpeed); // yaw
-  rotateLocal(_AXIS_X, -e.movementY * CONFIG.lookSpeed); // pitch (no clamp → full 360°)
+  const mx = e.movementX, my = e.movementY;
+  const mag = Math.hypot(mx, my);
+  const limit = Math.max(160, _emaMove * 10); // only glitch-scale outliers exceed this
+  if (mag > limit) { _emaMove += (limit - _emaMove) * 0.3; return; } // Pointer-Lock spike → ignore frame
+  _emaMove += (mag - _emaMove) * 0.3;
+  rotateLocal(_AXIS_Y, -softCap(mx) * CONFIG.lookSpeed); // yaw  (about local up)
+  rotateLocal(_AXIS_X, -softCap(my) * CONFIG.lookSpeed); // pitch (about local right) — no poles
 });
 
 // ----------------------------------------------------------------------------
@@ -810,7 +969,7 @@ function updateMovement(dt) {
     camera.quaternion.copy(_gyroQuat);
   } else {
     // Roll thrusters (zero-g): tap/hold E (clockwise) or Q (anti-clockwise) to fire a
-    // thruster that imparts angular momentum about the local forward axis. Like the WASD
+    // thruster that imparts angular momentum about the local view axis. Like the WASD
     // thrusters, nothing damps it — you keep spinning until you counter-thrust or brake (X).
     if (locked) {
       if (keys['KeyE']) rollVel -= CONFIG.rollAccel * dt;
@@ -820,6 +979,7 @@ function updateMovement(dt) {
     if (rollDamp > 0) rollVel *= Math.exp(-rollDamp * dt);
     rollVel = Math.max(-CONFIG.maxRoll, Math.min(CONFIG.maxRoll, rollVel));
     rotateLocal(_AXIS_Z, rollVel * dt);
+    if (keys['KeyR']) levelHorizon(dt);            // hold R to roll the horizon back to level
   }
 
   _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
@@ -875,10 +1035,38 @@ const stats = document.getElementById('stats');
 let fps = 60, statTimer = 0;
 const trailRef = CONFIG.maxSpeed * 1.2; // speed at which trails reach trailMax
 
+// ----------------------------------------------------------------------------
+//  Orientation gizmo — a small bottom-right readout of the world axes as the
+//  camera sees them, so "up" (green = world +Y) and the poles are always visible.
+//  Drawn straight onto the canvas after the composer's final image.
+// ----------------------------------------------------------------------------
+const gizmoScene = new THREE.Scene();
+const gizmoAxes = new THREE.AxesHelper(1);                 // X red · Y(up) green · Z blue
+gizmoScene.add(gizmoAxes);
+const gizmoCam = new THREE.PerspectiveCamera(45, 1, 0.1, 10);
+gizmoCam.position.set(0, 0, 3.2);
+const _invQ = new THREE.Quaternion();
+function renderGizmo() {
+  gizmoAxes.quaternion.copy(camera.quaternion).invert(); // show the world frame from the camera's view
+  const w = window.innerWidth, h = window.innerHeight;
+  const s = Math.round(Math.min(120, w * 0.2)), m = 14;
+  renderer.setRenderTarget(null);
+  renderer.autoClear = false;
+  renderer.clearDepth();
+  renderer.setScissorTest(true);
+  renderer.setViewport(w - s - m, m, s, s);
+  renderer.setScissor(w - s - m, m, s, s);
+  renderer.render(gizmoScene, gizmoCam);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, w, h);
+  renderer.autoClear = true;
+}
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.05);
 
+  if (needsRebuild) { buildField(); needsRebuild = false; } // coalesce panel edits to ≤1 rebuild/frame
   updateMovement(dt);
   updateField(dt, camera.position, velocity);
 
@@ -891,6 +1079,7 @@ function animate() {
   afterimage.uniforms['damp'].value = Math.min(speed / trailRef, 1) * CONFIG.trailMax;
 
   composer.render();
+  renderGizmo();
 
   // HUD (throttled)
   statTimer += dt;
@@ -898,9 +1087,13 @@ function animate() {
   if (statTimer > 0.12) {
     statTimer = 0;
     const spinDeg = rollVel * 180 / Math.PI;
+    const elevDeg = Math.asin(Math.max(-1, Math.min(1, _fwd.y))) * 180 / Math.PI; // view elevation
+    const inverted = _up.y < 0; // camera's up is below the horizon → you're upside-down
     stats.textContent =
       `SPEED  ${speed.toFixed(0).padStart(3)} u/s` +
       `${(keys['ShiftLeft']||keys['ShiftRight']||boostOn) ? '  ⟫BOOST' : ''}\n` +
+      `LOOK   ${elevDeg >= 0 ? '+' : ''}${elevDeg.toFixed(0)}° elev` +
+      `${inverted ? '  ⚠UPSIDE-DOWN (hold R)' : ''}\n` +
       `${Math.abs(spinDeg) >= 1 ? `SPIN   ${(spinDeg >= 0 ? '↺' : '↻')}${Math.abs(spinDeg).toFixed(0).padStart(3)}°/s\n` : ''}` +
       `FPS    ${fps.toFixed(0).padStart(3)}` +
       `${scenePass.stereoEnabled ? '   ◐ 3D' : ''}`;
