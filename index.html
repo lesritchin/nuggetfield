@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
-<title>nuggetfield — infinite orb field</title>
+<title>nuggetfield - infinite orb field</title>
 <style>
   :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -66,7 +66,7 @@
     font-family: ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace; }
   /* shown only on touch devices, and only once you've started flying */
   body.touch.playing #touchUI { display: block; }
-  /* in Cardboard 3D the phone is in a headset — hide the thumb pads, keep the toggles
+  /* in Cardboard 3D the phone is in a headset - hide the thumb pads, keep the toggles
      reachable (so you can tap your way back out of stereo) */
   body.stereo #touchUI .tPad { display: none; }
 
@@ -146,10 +146,10 @@
     <span><b>Mouse</b></span><span>look around (full 360°)</span>
     <span><b>W&nbsp;A&nbsp;S&nbsp;D</b></span><span>thrust forward / strafe</span>
     <span><b>Space&nbsp;/&nbsp;C</b></span><span>thrust up / down</span>
-    <span><b>Q&nbsp;/&nbsp;E</b></span><span>roll thrusters — anti-clockwise / clockwise (zero-g spin)</span>
-    <span><b>R</b></span><span>level the horizon (hold) — straighten up if disoriented</span>
+    <span><b>Q&nbsp;/&nbsp;E</b></span><span>roll thrusters - anti-clockwise / clockwise (zero-g spin)</span>
+    <span><b>R</b></span><span>level the horizon (hold) - straighten up if disoriented</span>
     <span><b>Shift</b></span><span>boost</span>
-    <span><b>X</b></span><span>brake — stop motion &amp; spin</span>
+    <span><b>X</b></span><span>brake - stop motion &amp; spin</span>
     <span><b>V</b></span><span>toggle Cardboard 3D (split screen)</span>
     <span><b>O</b></span><span>live-tweak panel (↑↓ pick · ←→ adjust)</span>
     <span><b>Esc</b></span><span>release mouse</span>
@@ -189,7 +189,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
 
 // ============================================================================
-//  CONFIG — every look/feel knob lives here.
+//  CONFIG - every look/feel knob lives here.
 // ============================================================================
 const CONFIG = {
   // Field
@@ -199,7 +199,7 @@ const CONFIG = {
   sizeMax:      11.0,     // largest orb radius
   sizeBias:     2.0,      // >1 skews toward smaller orbs (lots of small, few big)
 
-  // Orb shape — irregular, faceted "space rocks"
+  // Orb shape - irregular, faceted "space rocks"
   geoDetail:     2,       // icosphere subdivisions (lower = chunkier facets)
   shapeVariants: 12,      // number of distinct lumpy shapes shared across the field
   noiseAmp:      0.26,    // bump height as a fraction of radius (0 = smooth sphere)
@@ -209,7 +209,7 @@ const CONFIG = {
   roughness:     0.40,
   metalness:     0.10,
 
-  // Orb motion — gentle drift, tumbling, and elastic collisions
+  // Orb motion - gentle drift, tumbling, and elastic collisions
   drift:          true,
   driftSpeed:     2.2,    // max gentle drift speed (units/s)
   spin:           true,
@@ -220,7 +220,7 @@ const CONFIG = {
   restitution:    0.92,   // bounciness (1 = perfectly elastic)
   collisionScale: 0.92,   // collision radius as a fraction of visual radius
   collisionGrid:  48,     // spatial-hash resolution (auto-bounded; perf knob)
-  cameraCollisions: true, // you have a body too — orbs bounce off you
+  cameraCollisions: true, // you have a body too - orbs bounce off you
   cameraRadius:     3.0,   // your personal collision bubble (world units)
   cameraMass:       150,   // heavier = you shove small orbs aside; big orbs still bump you
   cameraBounce:     0.6,   // restitution for hits against you
@@ -236,13 +236,13 @@ const CONFIG = {
   damping:     0.0,       // 0 = true zero-g: momentum preserved until you brake (X)
   brake:       4.0,       // extra damping while holding X (1/s)
   lookSpeed:   0.0022,    // mouse sensitivity (rad/px)
-  rollAccel:   2.6,       // Q/E roll thruster — angular acceleration (rad/s^2)
+  rollAccel:   2.6,       // Q/E roll thruster - angular acceleration (rad/s^2)
   maxRoll:     3.2,       // max spin rate cap (rad/s)
 
   // Atmosphere
-  fogDensity:  0.0046,    // FogExp2 — lighter = see further; keep ≳ 2/fieldRadius so the wrap edge stays hidden
+  fogDensity:  0.0046,    // FogExp2 - lighter = see further; keep ≳ 2/fieldRadius so the wrap edge stays hidden
 
-  // Lighting — a single "sun" so every orb shares one specular highlight (one
+  // Lighting - a single "sun" so every orb shares one specular highlight (one
   // unseen light source). The hemisphere fill adds colour to shadowed sides but
   // produces no specular, so it never creates a competing highlight.
   sunColor:       0xfff3e2,
@@ -265,6 +265,26 @@ const CONFIG = {
 };
 // pristine copy so the live-tweak panel can reset a knob to its starting value
 const DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
+
+// ----------------------------------------------------------------------------
+//  Persistence - remember the last-set value of every configurable knob in this
+//  browser, so the next visit starts from where you left off. We store only the
+//  user-tunable subset (the TWEAKS keys), merged in here *before* the renderer,
+//  lights, post-FX and buildField() read CONFIG - so a saved field rebuilds
+//  correctly on load. DEFAULTS stays pristine, so ⌫ still resets to code values.
+// ----------------------------------------------------------------------------
+const STORAGE_KEY = 'nuggetfield.config.v1';
+(function loadConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (!saved || typeof saved !== 'object') return;
+    for (const k in saved) {
+      if (!(k in CONFIG)) continue;                  // skip unknown / renamed keys
+      if (typeof CONFIG[k] !== typeof saved[k]) continue; // type guard vs corrupt data
+      CONFIG[k] = saved[k];
+    }
+  } catch {}                                          // private mode / disabled storage → use defaults
+})();
 
 // ============================================================================
 //  Renderer / scene / camera
@@ -346,7 +366,7 @@ stars.frustumCulled = false;
 scene.add(stars);
 
 // ============================================================================
-//  Lighting — ONE sun + ambient fill.
+//  Lighting - ONE sun + ambient fill.
 //  A single directional light gives every orb a single specular highlight on the
 //  same side, selling the illusion of one powerful unseen light. The hemisphere
 //  light only adds soft ambient colour (no specular), so it never competes.
@@ -358,7 +378,7 @@ sun.position.set(CONFIG.sunDir[0], CONFIG.sunDir[1], CONFIG.sunDir[2]); // targe
 scene.add(sun);
 
 // ============================================================================
-//  The infinite orb field — a handful of noisy, faceted shape variants spread
+//  The infinite orb field - a handful of noisy, faceted shape variants spread
 //  across InstancedMeshes, wrapped around the camera so the field never ends.
 // ============================================================================
 const _dummy = new THREE.Object3D();
@@ -447,7 +467,7 @@ function disposeField() {
   meshes = [];
 }
 
-// (Re)build the whole field from CONFIG — call after changing count / sizes / shape knobs.
+// (Re)build the whole field from CONFIG - call after changing count / sizes / shape knobs.
 function buildField() {
   disposeField();
   HALF = Math.max(20, CONFIG.fieldRadius); SPAN = HALF * 2; // field extent (and wrap distance)
@@ -543,7 +563,7 @@ function collideOrbs(camPos) {
                 pj.x += nx * sepJ; pj.y += ny * sepJ; pj.z += nz * sepJ;
                 const vj = velocities[j];
                 const vn = (vj.x - vi.x) * nx + (vj.y - vi.y) * ny + (vj.z - vi.z) * nz;
-                if (vn < 0) {                       // only if approaching — elastic impulse
+                if (vn < 0) {                       // only if approaching - elastic impulse
                   const jimp = -(1 + e) * vn / totalInv;
                   const ix = nx * jimp, iy = ny * jimp, iz = nz * jimp;
                   vi.x -= ix * imi; vi.y -= iy * imi; vi.z -= iz * imi;
@@ -560,7 +580,7 @@ function collideOrbs(camPos) {
 }
 
 // You are a heavy sphere in the same hash (always the centre cell, since the grid is
-// camera-relative): orbs bounce off you, and big orbs shove you back — giving them heft.
+// camera-relative): orbs bounce off you, and big orbs shove you back - giving them heft.
 function collideCamera(camPos, camVel) {
   const cr = CONFIG.cameraRadius, e = CONFIG.cameraBounce;
   const imC = 1 / Math.max(1e-3, CONFIG.cameraMass);
@@ -582,7 +602,7 @@ function collideCamera(camPos, camVel) {
             pj.x += nx * sepJ; pj.y += ny * sepJ; pj.z += nz * sepJ;              // and the orb away
             const vj = velocities[j];
             const vn = (vj.x - camVel.x) * nx + (vj.y - camVel.y) * ny + (vj.z - camVel.z) * nz;
-            if (vn < 0) {                          // only if approaching — elastic impulse
+            if (vn < 0) {                          // only if approaching - elastic impulse
               const jimp = -(1 + e) * vn / totalInv;
               const ix = nx * jimp, iy = ny * jimp, iz = nz * jimp;
               camVel.x -= ix * imC; camVel.y -= iy * imC; camVel.z -= iz * imC;
@@ -682,7 +702,7 @@ function setStereo(on) {
   divider.style.display = on ? 'block' : 'none';
   document.body.classList.toggle('stereo', on);
 }
-// open with ?stereo (or ?cardboard) to start directly in split-screen 3D — handy on a phone
+// open with ?stereo (or ?cardboard) to start directly in split-screen 3D - handy on a phone
 setStereo(/stereo|cardboard|vr/i.test(location.search + location.hash));
 const afterimage = new AfterimagePass();
 afterimage.uniforms['damp'].value = 0.0;
@@ -695,7 +715,7 @@ composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
 // ============================================================================
-//  Live-tweak panel — surface the main CONFIG knobs as runtime keyboard controls.
+//  Live-tweak panel - surface the main CONFIG knobs as runtime keyboard controls.
 //  O = open/close · ↑/↓ pick a knob · ←/→ adjust (hold to ramp) · ⌫ reset that knob.
 //  Cheap knobs apply instantly; field-shape knobs (count, sizes, lumpiness, variety)
 //  flag a rebuild that the main loop coalesces to one rebuild per frame.
@@ -742,7 +762,7 @@ const fmtVal = (v) => typeof v === 'boolean' ? (v ? 'ON' : 'OFF')
 
 function renderPanel() {
   if (!panelOpen) return;
-  let html = '<div class="th">TWEAKS<span>↑↓ pick &nbsp;·&nbsp; ←→ adjust &nbsp;·&nbsp; ⌫ reset &nbsp;·&nbsp; O close</span></div>';
+  let html = '<div class="th">TWEAKS<span>↑↓ pick &nbsp;·&nbsp; ←→ adjust &nbsp;·&nbsp; ⌫ reset &nbsp;·&nbsp; ⇧⌫ reset all &nbsp;·&nbsp; O close</span></div>';
   for (let i = 0; i < TWEAKS.length; i++) {
     const t = TWEAKS[i];
     html += `<div class="tr${i === sel ? ' sel' : ''}"><span>${i === sel ? '▸ ' : '&nbsp;&nbsp;'}${t.label}</span><span>${fmtVal(CONFIG[t.k])}</span></div>`;
@@ -750,7 +770,19 @@ function renderPanel() {
   panel.innerHTML = html;
   panel.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
 }
-function applyTweak(t) { if (t.rebuild) needsRebuild = true; else t.apply?.(); }
+// Persist the user-tunable subset (debounced so hold-to-ramp doesn't thrash storage).
+let _saveTimer = 0;
+function saveConfig() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    try {
+      const out = {};
+      for (const t of TWEAKS) out[t.k] = CONFIG[t.k];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(out));
+    } catch {}                                        // storage full / unavailable → silently skip
+  }, 200);
+}
+function applyTweak(t) { if (t.rebuild) needsRebuild = true; else t.apply?.(); saveConfig(); }
 function adjustSel(dir) {
   const t = TWEAKS[sel];
   if (t.bool) {
@@ -763,6 +795,16 @@ function adjustSel(dir) {
   applyTweak(t); renderPanel();
 }
 function resetSel() { const t = TWEAKS[sel]; CONFIG[t.k] = DEFAULTS[t.k]; applyTweak(t); renderPanel(); }
+// Reset every knob to its code default and wipe the saved settings for this browser.
+function resetAll() {
+  for (const t of TWEAKS) {
+    CONFIG[t.k] = DEFAULTS[t.k];
+    if (t.rebuild) needsRebuild = true; else t.apply?.();   // field-shape knobs rebuild; rest apply live
+  }
+  clearTimeout(_saveTimer);                                  // cancel any pending debounced save...
+  try { localStorage.removeItem(STORAGE_KEY); } catch {}     // ...and clear the stored copy entirely
+  renderPanel();
+}
 
 addEventListener('keydown', (e) => {
   if (e.code === 'KeyO') { panelOpen = !panelOpen; panel.classList.toggle('show', panelOpen); renderPanel(); e.preventDefault(); return; }
@@ -772,25 +814,25 @@ addEventListener('keydown', (e) => {
     case 'ArrowDown':  sel = (sel + 1) % TWEAKS.length;                 renderPanel(); e.preventDefault(); break;
     case 'ArrowLeft':  adjustSel(-1); e.preventDefault(); break;
     case 'ArrowRight': adjustSel(+1); e.preventDefault(); break;
-    case 'Backspace':  resetSel();    e.preventDefault(); break;
+    case 'Backspace':  e.shiftKey ? resetAll() : resetSel(); e.preventDefault(); break;
     case 'Escape':     panelOpen = false; panel.classList.remove('show'); break; // Esc also frees the mouse
   }
 });
 
 // ============================================================================
-//  Controls — pointer-lock look + momentum WASD thrusters
+//  Controls - pointer-lock look + momentum WASD thrusters
 // ============================================================================
 const keys = Object.create(null);
 let locked = false;
 const velocity = new THREE.Vector3();
-let rollVel = 0; // angular velocity about the view axis (rad/s) — zero-g, persists
+let rollVel = 0; // angular velocity about the view axis (rad/s) - zero-g, persists
 const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _up = new THREE.Vector3(), _thrust = new THREE.Vector3();
 
 // True 6DOF / spaceship orientation: the camera quaternion IS the state, and every
 // look/roll input is an incremental rotation about a *local* axis. There are no poles,
 // and the controls stay consistent even upside-down (mouse-up always pitches toward the
 // top of your view, mouse-left always yaws to your left). Yaw+pitch loops slowly build
-// up roll over time — that's inherent to free flight; hold R to roll back to level.
+// up roll over time - that's inherent to free flight; hold R to roll back to level.
 const _AXIS_X = new THREE.Vector3(1, 0, 0); // local right (pitch axis)
 const _AXIS_Y = new THREE.Vector3(0, 1, 0); // local up    (yaw axis)
 const _AXIS_Z = new THREE.Vector3(0, 0, 1); // local back  (roll axis)
@@ -817,7 +859,7 @@ function levelHorizon(dt) {
 }
 
 // Pointer-Lock spike rejection. Chromium (especially on Windows) intermittently reports a
-// single mousemove delta vastly larger than the actual hand motion — one bogus ~260px event
+// single mousemove delta vastly larger than the actual hand motion - one bogus ~260px event
 // among ~5px events whips the whole view to a random angle. We drop only TRUE outliers: a
 // delta beyond any plausible flick AND far above your own recent speed. The generous floor
 // means every realistic movement passes untouched (no lag), and accepted movement past a
@@ -835,11 +877,11 @@ addEventListener('mousemove', (e) => {
   if (mag > limit) { _emaMove += (limit - _emaMove) * 0.3; return; } // Pointer-Lock spike → ignore frame
   _emaMove += (mag - _emaMove) * 0.3;
   rotateLocal(_AXIS_Y, -softCap(mx) * CONFIG.lookSpeed); // yaw  (about local up)
-  rotateLocal(_AXIS_X, -softCap(my) * CONFIG.lookSpeed); // pitch (about local right) — no poles
+  rotateLocal(_AXIS_X, -softCap(my) * CONFIG.lookSpeed); // pitch (about local right) - no poles
 });
 
 // ----------------------------------------------------------------------------
-//  Mobile "move to look" — phone gyroscope drives the view (great for Cardboard)
+//  Mobile "move to look" - phone gyroscope drives the view (great for Cardboard)
 // ----------------------------------------------------------------------------
 // DeviceOrientation reports the phone's *absolute* orientation; we convert it to
 // the camera quaternion every frame so the viewport tracks the phone 1:1. While
@@ -904,10 +946,10 @@ addEventListener('touchend',    (e) => { if (!e.touches || e.touches.length === 
 addEventListener('touchcancel', () => { touchThrust = false; }, { passive: true });
 
 // ----------------------------------------------------------------------------
-//  On-screen touch buttons — full control parity without a keyboard
+//  On-screen touch buttons - full control parity without a keyboard
 // ----------------------------------------------------------------------------
 const touchMove = { fwd: false, back: false, left: false, right: false, up: false, down: false };
-let boostOn = false; // sticky on mobile (tap to toggle) — holding it alongside a thrust is awkward
+let boostOn = false; // sticky on mobile (tap to toggle) - holding it alongside a thrust is awkward
 
 function toggleFullscreen() {
   const el = document.documentElement;
@@ -916,7 +958,7 @@ function toggleFullscreen() {
   const active = document.fullscreenElement || document.webkitFullscreenElement;
   try { active ? exit?.call(document) : req?.call(el); } catch {}
 }
-// iOS Safari can't fullscreen arbitrary elements — hide the button there to avoid a dead control
+// iOS Safari can't fullscreen arbitrary elements - hide the button there to avoid a dead control
 if (!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen)) {
   document.querySelector('#touchUI [data-act="fullscreen"]')?.remove();
 }
@@ -931,7 +973,7 @@ document.querySelectorAll('#touchUI [data-move]').forEach((btn) => {
   btn.addEventListener('pointerleave',  set(false));
 });
 
-// tap-action buttons (3D / fullscreen / stop / boost) — act on pointerup (a user gesture,
+// tap-action buttons (3D / fullscreen / stop / boost) - act on pointerup (a user gesture,
 // which fullscreen and the iOS permission flow both require)
 document.querySelectorAll('#touchUI [data-act]').forEach((btn) => {
   btn.addEventListener('pointerup', (e) => {
@@ -965,12 +1007,12 @@ document.addEventListener('pointerlockchange', () => {
 
 function updateMovement(dt) {
   if (gyroLook) {
-    // Mobile: the phone's orientation is the look — move the phone, the view follows.
+    // Mobile: the phone's orientation is the look - move the phone, the view follows.
     camera.quaternion.copy(_gyroQuat);
   } else {
     // Roll thrusters (zero-g): tap/hold E (clockwise) or Q (anti-clockwise) to fire a
     // thruster that imparts angular momentum about the local view axis. Like the WASD
-    // thrusters, nothing damps it — you keep spinning until you counter-thrust or brake (X).
+    // thrusters, nothing damps it - you keep spinning until you counter-thrust or brake (X).
     if (locked) {
       if (keys['KeyE']) rollVel -= CONFIG.rollAccel * dt;
       if (keys['KeyQ']) rollVel += CONFIG.rollAccel * dt;
@@ -995,7 +1037,7 @@ function updateMovement(dt) {
     if (keys['KeyC']) _thrust.sub(_up);
   }
   if (gyroLook && touchThrust) _thrust.add(_fwd); // gaze-and-go: hold screen to fly forward
-  // on-screen touch buttons (mobile) — relative to where you're looking
+  // on-screen touch buttons (mobile) - relative to where you're looking
   if (touchMove.fwd)   _thrust.add(_fwd);
   if (touchMove.back)  _thrust.sub(_fwd);
   if (touchMove.right) _thrust.add(_right);
@@ -1036,7 +1078,7 @@ let fps = 60, statTimer = 0;
 const trailRef = CONFIG.maxSpeed * 1.2; // speed at which trails reach trailMax
 
 // ----------------------------------------------------------------------------
-//  Orientation gizmo — a small bottom-right readout of the world axes as the
+//  Orientation gizmo - a small bottom-right readout of the world axes as the
 //  camera sees them, so "up" (green = world +Y) and the poles are always visible.
 //  Drawn straight onto the canvas after the composer's final image.
 // ----------------------------------------------------------------------------
