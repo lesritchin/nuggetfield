@@ -151,6 +151,7 @@
     <span><b>Shift</b></span><span>boost</span>
     <span><b>X</b></span><span>brake - stop motion &amp; spin</span>
     <span><b>V</b></span><span>toggle Cardboard 3D (split screen)</span>
+    <span><b>H</b></span><span>toggle HUD (speed / FPS readout)</span>
     <span><b>O</b></span><span>live-tweak panel (↑↓ pick · ←→ adjust)</span>
     <span><b>Esc</b></span><span>release mouse</span>
     <span><b>Phone</b></span><span>move to look · on-screen buttons to fly · hold to gaze-fly</span>
@@ -697,10 +698,27 @@ const scenePass = new DualViewRenderPass(scene, camera);
 composer.addPass(scenePass);
 // the thin centre line between the eyes (shown only in stereo); helps line up a holder
 const divider = document.getElementById('divider');
+
+// ---- HUD visibility - H toggles the stats/gizmo readout; the choice is remembered
+//      per browser, and it's force-hidden in Cardboard 3D (the split-screen would
+//      otherwise smear a single centred overlay across both eyes). ----
+const HUD_KEY = 'nuggetfield.hud.v1';
+const statsEl = document.getElementById('stats');
+let hudOn = true;
+try { hudOn = localStorage.getItem(HUD_KEY) !== '0'; } catch {} // missing/'1' = on, '0' = off
+const hudActive = () => hudOn && !scenePass.stereoEnabled;       // effective on-screen visibility
+function applyHud() { statsEl.style.display = hudActive() ? '' : 'none'; } // gizmo: see animate()
+function toggleHud() {
+  hudOn = !hudOn;
+  try { localStorage.setItem(HUD_KEY, hudOn ? '1' : '0'); } catch {}
+  applyHud();
+}
+
 function setStereo(on) {
   scenePass.stereoEnabled = on;
   divider.style.display = on ? 'block' : 'none';
   document.body.classList.toggle('stereo', on);
+  applyHud();                                          // stereo forces the HUD off; exiting restores it
 }
 // open with ?stereo (or ?cardboard) to start directly in split-screen 3D - handy on a phone
 setStereo(/stereo|cardboard|vr/i.test(location.search + location.hash));
@@ -991,6 +1009,7 @@ addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyV') setStereo(!scenePass.stereoEnabled);
+  if (e.code === 'KeyH') toggleHud();
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 
@@ -1073,7 +1092,6 @@ addEventListener('resize', () => {
 //  Main loop
 // ============================================================================
 const clock = new THREE.Clock();
-const stats = document.getElementById('stats');
 let fps = 60, statTimer = 0;
 const trailRef = CONFIG.maxSpeed * 1.2; // speed at which trails reach trailMax
 
@@ -1121,17 +1139,17 @@ function animate() {
   afterimage.uniforms['damp'].value = Math.min(speed / trailRef, 1) * CONFIG.trailMax;
 
   composer.render();
-  renderGizmo();
+  if (hudActive()) renderGizmo();                  // skip the axis gizmo when the HUD is hidden
 
   // HUD (throttled)
   statTimer += dt;
   fps += ((1 / Math.max(dt, 1e-3)) - fps) * 0.1;
-  if (statTimer > 0.12) {
+  if (hudActive() && statTimer > 0.12) {
     statTimer = 0;
     const spinDeg = rollVel * 180 / Math.PI;
     const elevDeg = Math.asin(Math.max(-1, Math.min(1, _fwd.y))) * 180 / Math.PI; // view elevation
     const inverted = _up.y < 0; // camera's up is below the horizon → you're upside-down
-    stats.textContent =
+    statsEl.textContent =
       `SPEED  ${speed.toFixed(0).padStart(3)} u/s` +
       `${(keys['ShiftLeft']||keys['ShiftRight']||boostOn) ? '  ⟫BOOST' : ''}\n` +
       `LOOK   ${elevDeg >= 0 ? '+' : ''}${elevDeg.toFixed(0)}° elev` +
