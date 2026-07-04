@@ -12,7 +12,7 @@
 
   /* ---------- HUD ---------- */
   #hud {
-    position: fixed; inset: 0; pointer-events: none;
+    position: fixed; inset: 0; pointer-events: none; z-index: 1;   /* stay above the canvas even when it's CSS-transformed (split shift) */
     font-family: "SFMono-Regular", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
     color: #aab6ff;
   }
@@ -262,6 +262,7 @@ const CONFIG = {
   damping:     0.0,       // 0 = true zero-g: momentum preserved until you brake (X)
   brake:       4.0,       // extra damping while holding X (1/s)
   lookSpeed:   0.0022,    // mouse sensitivity (rad/px)
+  gyroDeadband: 0.3,      // deg: hold the gyro view steady below this much rotation (kills ~1px sensor jitter when still)
   rollAccel:   2.6,       // Q/E roll thruster - angular acceleration (rad/s^2)
   maxRoll:     3.2,       // max spin rate cap (rad/s)
 
@@ -833,6 +834,7 @@ const TWEAKS = [
   { k:'maxSpeed',       label:'Max speed',       min:5,      max:200,   step:5 },
   { k:'accel',          label:'Thrust accel',    min:5,      max:200,   step:2 },
   { k:'lookSpeed',      label:'Look speed',      min:0.0005, max:0.006, step:0.0002 },
+  { k:'gyroDeadband',   label:'Gyro steady',     min:0,      max:2,     step:0.05 },
   { k:'drift',          label:'Drift',           bool:true, apply:applyMotion },
   { k:'driftSpeed',     label:'Drift speed',     min:0,      max:10,    step:0.2,    apply:applyMotion },
   { k:'spin',           label:'Tumble',          bool:true, apply:applyMotion },
@@ -1207,8 +1209,10 @@ function pollGamepad() {
 
 function updateMovement(dt) {
   if (gyroLook) {
-    // Mobile: the phone's orientation is the look - move the phone, the view follows.
-    camera.quaternion.copy(_gyroQuat);
+    // Mobile: the phone's orientation is the look - move the phone, the view follows. The sensor is
+    // noisy, so it twitches ~1px when you hold still; hold the view steady until the phone actually
+    // rotates past a small dead-band. Real head motion far exceeds it, so tracking stays 1:1 (no lag).
+    if (camera.quaternion.angleTo(_gyroQuat) > CONFIG.gyroDeadband * DEG) camera.quaternion.copy(_gyroQuat);
   } else {
     // Roll thrusters (zero-g): tap/hold E (clockwise) or Q (anti-clockwise) to fire a
     // thruster that imparts angular momentum about the local view axis. Like the WASD
