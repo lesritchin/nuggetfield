@@ -707,18 +707,13 @@ class DualViewRenderPass extends Pass {
       renderer.getSize(this._size);
       const w = this._size.x, h = this._size.y;
       const half = Math.floor(w / 2);
-      const s = CONFIG.stereoSplit | 0;            // slide the whole L/R pair sideways (headset centring)
+      // Always split dead-centre here. The headset-centring "split shift" is applied as a CSS
+      // translate on the whole canvas (applyStereoShift) - NOT a GL viewport offset - so we never
+      // hand WebGL an off-screen/negative viewport, which hard-crashed the GPU on some phones.
       renderer.setScissorTest(true);
-      // Each eye's viewport is offset by s; the scissor is clamped to the on-screen slice so a
-      // shift just reveals a black band on one edge and clips the other (invisible in the headset).
-      let x0, x1;
-      renderer.setViewport(s, 0, half, h);
-      x0 = Math.max(0, s); x1 = Math.min(w, s + half);
-      renderer.setScissor(x0, 0, Math.max(0, x1 - x0), h);
+      renderer.setScissor(0, 0, half, h);        renderer.setViewport(0, 0, half, h);
       renderer.render(this.scene, this.stereo.cameraL);
-      renderer.setViewport(s + half, 0, w - half, h);
-      x0 = Math.max(0, s + half); x1 = Math.min(w, s + w);
-      renderer.setScissor(x0, 0, Math.max(0, x1 - x0), h);
+      renderer.setScissor(half, 0, w - half, h); renderer.setViewport(half, 0, w - half, h);
       renderer.render(this.scene, this.stereo.cameraR);
       renderer.setScissorTest(false);
       renderer.setViewport(0, 0, w, h);
@@ -732,9 +727,20 @@ const scenePass = new DualViewRenderPass(scene, camera);
 composer.addPass(scenePass);
 // the thin centre line between the eyes (shown only in stereo); helps line up a holder
 const divider = document.getElementById('divider');
-// keep the centre line on the shifted split (calc(50% + s) tracks the render's s + w/2)
-function positionDivider() { divider.style.left = `calc(50% + ${CONFIG.stereoSplit | 0}px)`; }
-positionDivider();
+// Headset centring: when the phone sits off-centre in the clamp, slide the whole stereo image
+// sideways so the split lands on the headset's optical centre. Done as a CSS transform on the
+// canvas (not a GL viewport offset - that crashed the GPU on some phones), so both eyes shift
+// equally with no distortion. Only takes effect in stereo; the divider line tracks it.
+function positionDivider() {
+  const s = CONFIG.stereoSplit | 0;
+  divider.style.left = `calc(50% ${s < 0 ? '-' : '+'} ${Math.abs(s)}px)`;   // sign-safe calc
+}
+function applyStereoShift() {
+  const s = scenePass.stereoEnabled ? (CONFIG.stereoSplit | 0) : 0;          // no shift outside stereo
+  renderer.domElement.style.transform = s ? `translateX(${s}px)` : '';
+  positionDivider();
+}
+applyStereoShift();
 
 // ---- HUD visibility - H toggles the stats/gizmo readout; the choice is remembered
 //      per browser, and it's force-hidden in Cardboard 3D (the split-screen would
@@ -785,6 +791,7 @@ function setStereo(on) {
   document.body.classList.toggle('stereo', on);
   applyHud();                                          // stereo forces the HUD off; exiting restores it
   syncImmersive();                                     // stereo hides the toggles too; exiting restores them
+  applyStereoShift();                                  // apply the headset-centring shift (or clear it in mono)
 }
 // open with ?stereo (or ?cardboard) to start directly in split-screen 3D - handy on a phone
 setStereo(/stereo|cardboard|vr/i.test(location.search + location.hash));
@@ -834,7 +841,7 @@ const TWEAKS = [
   { k:'cameraCollisions', label:'You collide',   bool:true },
   { k:'eyeSeparation',  label:'3D eye-sep',      min:0,      max:3,     step:0.05 },
   { k:'stereoFocus',    label:'3D focus dist',   min:5,      max:300,   step:5,      int:true },
-  { k:'stereoSplit',    label:'3D split shift',  min:-200,   max:200,   step:2,      int:true, apply:positionDivider },
+  { k:'stereoSplit',    label:'3D split shift',  min:-200,   max:200,   step:2,      int:true, apply:applyStereoShift },
 ];
 
 const panel = document.createElement('div');
