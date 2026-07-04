@@ -1062,9 +1062,8 @@ function enableGyroLook() {
 }
 
 // reveal the on-screen controls on touch devices (desktop keeps using the keyboard)
-if (matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || navigator.maxTouchPoints > 0) {
-  document.body.classList.add('touch');
-}
+const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+if (isTouch) document.body.classList.add('touch');
 
 // gaze-and-go: hold an empty part of the screen to thrust the way you're looking.
 // Touches that land on a control button are ignored here (the button handles them).
@@ -1126,11 +1125,18 @@ addEventListener('keyup', (e) => { keys[e.code] = false; });
 
 overlay.addEventListener('click', () => {
   enableGyroLook();                                  // mobile: request gyro + start tracking
-  const p = renderer.domElement.requestPointerLock?.(); // desktop: lock the mouse (no-op on phones)
-  if (p && p.catch) p.catch(() => {});
+  // Desktop only: capture the mouse for look. We must NOT do this on a phone - the gyro drives the
+  // view there, and a connected VR controller shows up as a mouse, so Android actually grants the
+  // lock: that pops the "To show your cursor..." banner and, as the lock flickers, flashes the
+  // overlay back on (pointerlockchange below). So skip pointer lock entirely on touch devices.
+  if (!isTouch) {
+    const p = renderer.domElement.requestPointerLock?.();
+    if (p && p.catch) p.catch(() => {});
+  }
 });
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === renderer.domElement;
+  if (isTouch) return;                               // on touch the gyro owns the overlay / playing state
   overlay.classList.toggle('hidden', locked);
   document.body.classList.toggle('playing', locked);
 });
