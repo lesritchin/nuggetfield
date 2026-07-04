@@ -91,7 +91,11 @@
   #touchUI .tToggles {
     position: absolute; top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
     display: flex; gap: 10px; pointer-events: none;
+    transition: opacity 0.35s ease;
   }
+  /* immersive fullscreen: fade the 3D / restore / STOP toggles out until the screen is tapped */
+  body.toggles-hidden #touchUI .tToggles { opacity: 0; }
+  body.toggles-hidden #touchUI .tToggles .tBtn { pointer-events: none; }
   /* left thumb: a +-pad for up / down / strafe */
   #touchUI .tLeft {
     position: absolute; left: calc(16px + env(safe-area-inset-left)); bottom: calc(20px + env(safe-area-inset-bottom));
@@ -121,6 +125,19 @@
   #tweak .tr { display: flex; justify-content: space-between; gap: 14px; padding: 1px 4px; border-radius: 5px; white-space: nowrap; }
   #tweak .tr.sel { background: rgba(90,110,255,0.30); color: #fff; }
   #tweak .tr span:last-child { opacity: 0.92; }
+
+  /* ---------- Touch: make the tweak panel usable without a keyboard ---------- */
+  /* the panel is normally click-through (keyboard-driven); on phones let taps land */
+  body.touch #tweak { pointer-events: auto; }
+  body.touch #tweak .tr { padding: 5px 4px; }             /* fatter rows = easier tap targets */
+  /* while tuning, the flight pads make way for a +/- control bar (gaze/controller still fly) */
+  body.tweaking #touchUI .tPad { display: none; }
+  #touchUI .tTweakBar {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: calc(20px + env(safe-area-inset-bottom));
+    display: none; gap: 10px; pointer-events: none;
+  }
+  body.touch.tweaking #touchUI .tTweakBar { display: flex; }
 </style>
 
 <script type="importmap">
@@ -163,6 +180,7 @@
 <!-- On-screen controls for touch devices (no keyboard needed) -->
 <div id="touchUI">
   <div class="tToggles">
+    <button class="tBtn"       data-act="tweak"      aria-label="tweak panel">⚙</button>
     <button class="tBtn tWide" data-act="stereo"     aria-label="toggle 3D">3D</button>
     <button class="tBtn"       data-act="fullscreen" aria-label="fullscreen">⛶</button>
     <button class="tBtn tWide" data-act="stop"       aria-label="full stop">STOP</button>
@@ -177,6 +195,13 @@
     <button class="tBtn tFwd"  data-move="fwd"  aria-label="thrust forward">FWD</button>
     <button class="tBtn tWide" data-move="back" aria-label="thrust back">REV</button>
     <button class="tBtn tWide" data-act="boost" aria-label="boost">BOOST</button>
+  </div>
+  <!-- tweak-panel controls (shown only while the panel is open on touch) -->
+  <div class="tTweakBar">
+    <button class="tBtn tWide" data-tweak="dec"   aria-label="decrease value">−</button>
+    <button class="tBtn tWide" data-tweak="inc"   aria-label="increase value">＋</button>
+    <button class="tBtn"       data-tweak="reset" aria-label="reset value">⟲</button>
+    <button class="tBtn tWide" data-tweak="close" aria-label="close tweaks">DONE</button>
   </div>
 </div>
 
@@ -714,11 +739,40 @@ function toggleHud() {
   applyHud();
 }
 
+// ----------------------------------------------------------------------------
+//  Immersive auto-hide - in fullscreen OR Cardboard 3D, the top-right 3D / restore /
+//  STOP toggles fade out so they don't clutter the view (in a headset they'd float in
+//  one eye). Tap the screen to bring them back for a few seconds, then they fade again
+//  - in a headset you slip the phone out, tap to reveal, then tap 3D to come back.
+//  Outside those modes they stay put as before.
+// ----------------------------------------------------------------------------
+const TOGGLE_HIDE_MS = 2600;
+let _toggleTimer = 0;
+const isFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+const immersive    = () => isFullscreen() || scenePass.stereoEnabled;
+
+function hideToggles() { if (immersive()) document.body.classList.add('toggles-hidden'); }
+function revealToggles() {
+  document.body.classList.remove('toggles-hidden');
+  clearTimeout(_toggleTimer);
+  if (immersive()) _toggleTimer = setTimeout(hideToggles, TOGGLE_HIDE_MS); // re-arm the fade-out
+}
+function syncImmersive() {                              // fullscreen or stereo entered / left
+  clearTimeout(_toggleTimer);
+  if (immersive()) _toggleTimer = setTimeout(hideToggles, TOGGLE_HIDE_MS); // linger briefly, then fade
+  else document.body.classList.remove('toggles-hidden');                    // always visible otherwise
+}
+addEventListener('fullscreenchange', syncImmersive);
+addEventListener('webkitfullscreenchange', syncImmersive);
+// any tap on the screen re-reveals them (the gaze-to-thrust handler still fires too)
+addEventListener('pointerdown', () => { if (immersive()) revealToggles(); }, { passive: true });
+
 function setStereo(on) {
   scenePass.stereoEnabled = on;
   divider.style.display = on ? 'block' : 'none';
   document.body.classList.toggle('stereo', on);
   applyHud();                                          // stereo forces the HUD off; exiting restores it
+  syncImmersive();                                     // stereo hides the toggles too; exiting restores them
 }
 // open with ?stereo (or ?cardboard) to start directly in split-screen 3D - handy on a phone
 setStereo(/stereo|cardboard|vr/i.test(location.search + location.hash));
@@ -783,7 +837,7 @@ function renderPanel() {
   let html = '<div class="th">TWEAKS<span>↑↓ pick &nbsp;·&nbsp; ←→ adjust &nbsp;·&nbsp; ⌫ reset &nbsp;·&nbsp; ⇧⌫ reset all &nbsp;·&nbsp; O close</span></div>';
   for (let i = 0; i < TWEAKS.length; i++) {
     const t = TWEAKS[i];
-    html += `<div class="tr${i === sel ? ' sel' : ''}"><span>${i === sel ? '▸ ' : '&nbsp;&nbsp;'}${t.label}</span><span>${fmtVal(CONFIG[t.k])}</span></div>`;
+    html += `<div class="tr${i === sel ? ' sel' : ''}" data-i="${i}"><span>${i === sel ? '▸ ' : '&nbsp;&nbsp;'}${t.label}</span><span>${fmtVal(CONFIG[t.k])}</span></div>`;
   }
   panel.innerHTML = html;
   panel.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
@@ -824,8 +878,43 @@ function resetAll() {
   renderPanel();
 }
 
+// Open/close the panel (used by the O key, Esc, and the mobile ⚙ button). The
+// `tweaking` body class drives the touch layout: flight pads out, +/- bar in.
+function setPanel(open) {
+  panelOpen = open;
+  panel.classList.toggle('show', panelOpen);
+  document.body.classList.toggle('tweaking', panelOpen);
+  renderPanel();
+}
+
+// --- Touch controls for the panel (no keyboard): tap a row to pick it, then use the
+//     on-screen −/＋/⟲/DONE bar. Rows are re-rendered wholesale, so we delegate off the
+//     panel (which persists) via each row's data-i. Desktop keeps pointer-events:none,
+//     so these taps never reach it - the keyboard path is untouched.
+panel.addEventListener('click', (e) => {
+  const row = e.target.closest('.tr');
+  if (row) { sel = +row.dataset.i; renderPanel(); }
+});
+let _rampTimer = 0;
+const stopRamp = () => { clearInterval(_rampTimer); _rampTimer = 0; };
+function startRamp(dir) { stopRamp(); adjustSel(dir); _rampTimer = setInterval(() => adjustSel(dir), 120); } // hold to ramp
+document.querySelectorAll('#touchUI [data-tweak]').forEach((btn) => {
+  const act = btn.dataset.tweak;
+  if (act === 'dec' || act === 'inc') {                       // −/＋ : one step, then repeat while held
+    const dir = act === 'inc' ? 1 : -1;
+    btn.addEventListener('pointerdown', (e) => { e.preventDefault(); startRamp(dir); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => btn.addEventListener(ev, stopRamp));
+  } else {
+    btn.addEventListener('pointerup', (e) => {
+      e.preventDefault();
+      if (act === 'reset') resetSel();
+      else if (act === 'close') setPanel(false);
+    });
+  }
+});
+
 addEventListener('keydown', (e) => {
-  if (e.code === 'KeyO') { panelOpen = !panelOpen; panel.classList.toggle('show', panelOpen); renderPanel(); e.preventDefault(); return; }
+  if (e.code === 'KeyO') { setPanel(!panelOpen); e.preventDefault(); return; }
   if (!panelOpen) return;
   switch (e.code) {
     case 'ArrowUp':    sel = (sel - 1 + TWEAKS.length) % TWEAKS.length; renderPanel(); e.preventDefault(); break;
@@ -833,7 +922,7 @@ addEventListener('keydown', (e) => {
     case 'ArrowLeft':  adjustSel(-1); e.preventDefault(); break;
     case 'ArrowRight': adjustSel(+1); e.preventDefault(); break;
     case 'Backspace':  e.shiftKey ? resetAll() : resetSel(); e.preventDefault(); break;
-    case 'Escape':     panelOpen = false; panel.classList.remove('show'); break; // Esc also frees the mouse
+    case 'Escape':     setPanel(false); break;                // Esc also frees the mouse
   }
 });
 
@@ -958,7 +1047,7 @@ if (matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || navig
 
 // gaze-and-go: hold an empty part of the screen to thrust the way you're looking.
 // Touches that land on a control button are ignored here (the button handles them).
-const onUI = (e) => e.target.closest && e.target.closest('#touchUI');
+const onUI = (e) => e.target.closest && e.target.closest('#touchUI, #tweak');
 addEventListener('touchstart',  (e) => { if (gyroLook && !onUI(e)) touchThrust = true; }, { passive: true });
 addEventListener('touchend',    (e) => { if (!e.touches || e.touches.length === 0) touchThrust = false; }, { passive: true });
 addEventListener('touchcancel', () => { touchThrust = false; }, { passive: true });
@@ -997,6 +1086,7 @@ document.querySelectorAll('#touchUI [data-act]').forEach((btn) => {
   btn.addEventListener('pointerup', (e) => {
     e.preventDefault(); e.stopPropagation();
     switch (btn.dataset.act) {
+      case 'tweak':      setPanel(!panelOpen); break;              // ⚙ open/close the live-tweak panel
       case 'stereo':     setStereo(!scenePass.stereoEnabled); break;
       case 'fullscreen': toggleFullscreen(); break;
       case 'stop':       velocity.set(0, 0, 0); rollVel = 0; break; // instant dead stop
@@ -1023,6 +1113,70 @@ document.addEventListener('pointerlockchange', () => {
   overlay.classList.toggle('hidden', locked);
   document.body.classList.toggle('playing', locked);
 });
+
+// ============================================================================
+//  VR Controller support (phone BLE gamepad) - engages while the gyro drives look
+// ----------------------------------------------------------------------------
+//  Every input here is gated on `gyroLook`, so it only comes alive on a phone with
+//  the gyroscope steering the view. Desktop mouse-look, desktop volume keys, and a
+//  plain desktop gamepad are all left exactly as they were.
+// ============================================================================
+
+// --- Thumbstick (arrives as mousemove / HID mouse axis) -> strafe + up/down thrust.
+//     The gyro owns look, so the sim already ignores these deltas for aiming (the
+//     look handler bails on gyroLook); we accumulate them between frames and spend
+//     them as directional thrust. Kept in its own stickMove set - NOT touchMove - so
+//     the on-screen ◄►▲▼ pads keep working instead of being cleared every frame.
+let _stickDX = 0, _stickDY = 0;
+const STICK_DEAD  = 3;    // px - ignore tiny jitter (raise if the stick feels twitchy)
+const STICK_SCALE = 18;   // px = full push - reserved for optional analog thrust (see note below)
+const stickMove = { left: false, right: false, up: false, down: false };
+
+addEventListener('mousemove', (e) => {
+  if (!gyroLook) return;               // desktop mouse-look owns the pointer; don't touch it
+  _stickDX += e.movementX ?? 0;        // relative deltas - correct regardless of cursor position
+  _stickDY += e.movementY ?? 0;
+});
+
+// Convert the frame's accumulated stick motion into directional flags (called in animate()).
+function applyStickThrust() {
+  const dx = _stickDX, dy = _stickDY;
+  _stickDX = 0; _stickDY = 0;          // consume this frame's motion so it doesn't pile up forever
+  stickMove.left  = dx < -STICK_DEAD;
+  stickMove.right = dx >  STICK_DEAD;
+  stickMove.up    = dy < -STICK_DEAD;  // screen-up = thrust up
+  stickMove.down  = dy >  STICK_DEAD;
+  // Thrust is binary on/off, so STICK_SCALE is unused today. For analog push you'd scale
+  // CONFIG.accel by min(1, |dx|/STICK_SCALE) etc. rather than flipping a boolean.
+}
+
+// --- Media keys (175 = Vol Up, 174 = Vol Down) -> forward / back thrust.
+//     Gated on gyroLook so a desktop keyboard's volume keys still change the volume.
+addEventListener('keydown', (e) => {
+  if (!gyroLook) return;
+  if (e.keyCode === 175) { touchMove.fwd  = true; e.preventDefault(); }  // Vol Up  -> forward
+  if (e.keyCode === 174) { touchMove.back = true; e.preventDefault(); }  // Vol Down -> back
+});
+addEventListener('keyup', (e) => {
+  if (!gyroLook) return;
+  if (e.keyCode === 175) touchMove.fwd  = false;
+  if (e.keyCode === 174) touchMove.back = false;
+});
+
+// --- Gamepad buttons (A = btn0, B = btn3 - each also surfaces on a shoulder button).
+let _btn3Last = false;
+function pollGamepad() {
+  if (!gyroLook) return;
+  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const gp of gps) {
+    if (!gp) continue;
+    const btn0 = gp.buttons[0]?.pressed ?? false;
+    const btn3 = gp.buttons[3]?.pressed ?? false;
+    keys['ShiftLeft'] = btn0;                                        // A / upper shoulder -> boost (hold)
+    if (btn3 && !_btn3Last) { velocity.set(0, 0, 0); rollVel = 0; }  // B / lower shoulder -> full stop (on press)
+    _btn3Last = btn3;
+  }
+}
 
 function updateMovement(dt) {
   if (gyroLook) {
@@ -1063,6 +1217,11 @@ function updateMovement(dt) {
   if (touchMove.left)  _thrust.sub(_right);
   if (touchMove.up)    _thrust.add(_up);
   if (touchMove.down)  _thrust.sub(_up);
+  // VR thumbstick (accumulated mousemove) - strafe + elevation, additive with the pads
+  if (stickMove.right) _thrust.add(_right);
+  if (stickMove.left)  _thrust.sub(_right);
+  if (stickMove.up)    _thrust.add(_up);
+  if (stickMove.down)  _thrust.sub(_up);
   const boosting = keys['ShiftLeft'] || keys['ShiftRight'] || boostOn;
   const boost = boosting ? CONFIG.boost : 1;
   if (_thrust.lengthSq() > 0) {
@@ -1127,6 +1286,8 @@ function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
 
   if (needsRebuild) { buildField(); needsRebuild = false; } // coalesce panel edits to ≤1 rebuild/frame
+  applyStickThrust();   // VR stick: accumulated mousemove deltas -> stickMove thrust
+  pollGamepad();        // VR gamepad buttons -> boost (hold) / full stop (press)
   updateMovement(dt);
   updateField(dt, camera.position, velocity);
 
