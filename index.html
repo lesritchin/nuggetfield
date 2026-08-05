@@ -262,7 +262,7 @@ const CONFIG = {
   damping:     0.0,       // 0 = true zero-g: momentum preserved until you brake (X)
   brake:       4.0,       // extra damping while holding X (1/s)
   lookSpeed:   0.0022,    // mouse sensitivity (rad/px)
-  gyroDeadband: 0.3,      // deg: hold the gyro view steady below this much rotation (kills ~1px sensor jitter when still)
+  gyroResponse: 1.0,      // Hz: gyro min-cutoff - lower = steadier when still, higher = snappier (fast motion always tracks 1:1)
   rollAccel:   2.6,       // Q/E roll thruster - angular acceleration (rad/s^2)
   maxRoll:     3.2,       // max spin rate cap (rad/s)
 
@@ -834,7 +834,7 @@ const TWEAKS = [
   { k:'maxSpeed',       label:'Max speed',       min:5,      max:200,   step:5 },
   { k:'accel',          label:'Thrust accel',    min:5,      max:200,   step:2 },
   { k:'lookSpeed',      label:'Look speed',      min:0.0005, max:0.006, step:0.0002 },
-  { k:'gyroDeadband',   label:'Gyro steady',     min:0,      max:2,     step:0.05 },
+  { k:'gyroResponse',   label:'Gyro steady',     min:0.2,    max:8,     step:0.2 },
   { k:'drift',          label:'Drift',           bool:true, apply:applyMotion },
   { k:'driftSpeed',     label:'Drift speed',     min:0,      max:10,    step:0.2,    apply:applyMotion },
   { k:'spin',           label:'Tumble',          bool:true, apply:applyMotion },
@@ -1019,6 +1019,7 @@ addEventListener('mousemove', (e) => {
 let gyroLook = false;          // true once orientation events start flowing
 let touchThrust = false;       // tap-and-hold the screen = thrust where you're looking
 const DEG = Math.PI / 180;
+const GYRO_BETA = 30;          // Hz of extra cutoff per rad/s of tracking error - real motion raises the cutoff so the view tracks 1:1
 const _gyroQuat = new THREE.Quaternion();
 const _screenQ  = new THREE.Quaternion();
 const _ZEE = new THREE.Vector3(0, 0, 1);
@@ -1209,10 +1210,16 @@ function pollGamepad() {
 
 function updateMovement(dt) {
   if (gyroLook) {
-    // Mobile: the phone's orientation is the look - move the phone, the view follows. The sensor is
-    // noisy, so it twitches ~1px when you hold still; hold the view steady until the phone actually
-    // rotates past a small dead-band. Real head motion far exceeds it, so tracking stays 1:1 (no lag).
-    if (camera.quaternion.angleTo(_gyroQuat) > CONFIG.gyroDeadband * DEG) camera.quaternion.copy(_gyroQuat);
+    // Mobile: the phone's orientation is the look - move the phone, the view follows. The raw
+    // sensor twitches when the phone is still, and a hard dead-band just turns that shimmer into
+    // visible snaps whenever the noise wanders past the gate (stick-slip). Instead, low-pass the
+    // orientation with a cutoff that rises with rotation speed (One-Euro style): near-still the
+    // view is heavily averaged (rock steady); real head motion pushes the cutoff up so tracking
+    // stays 1:1 (worst-case lag a few ms - imperceptible). Big errors (tab return, orientation
+    // flip) drive the cutoff so high the slerp becomes an instant snap, so there's no slow glide.
+    const err = camera.quaternion.angleTo(_gyroQuat);                       // rad left to cover
+    const cutoff = CONFIG.gyroResponse + GYRO_BETA * (err / Math.max(dt, 1e-3)); // Hz
+    camera.quaternion.slerp(_gyroQuat, 1 - Math.exp(-2 * Math.PI * cutoff * dt));
   } else {
     // Roll thrusters (zero-g): tap/hold E (clockwise) or Q (anti-clockwise) to fire a
     // thruster that imparts angular momentum about the local view axis. Like the WASD
