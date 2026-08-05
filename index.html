@@ -268,6 +268,7 @@ const CONFIG = {
 
   // Atmosphere
   fogDensity:  0.0046,    // FogExp2 - lighter = see further; keep ≳ 2/fieldRadius so the wrap edge stays hidden
+  twinkleRate: 5,         // star flashes scheduled per second across the whole sky shell (roughly 1 in 7 lands on-screen)
 
   // Lighting - a single "sun" so every orb shares one specular highlight (one
   // unseen light source). The hemisphere fill adds colour to shadowed sides but
@@ -369,6 +370,7 @@ scene.add(sky);
 // ============================================================================
 const STAR_COUNT = 1600;
 const starGeo = new THREE.BufferGeometry();
+let starBase;                    // pristine per-star colours - the twinkle restores from here
 {
   const pos = new Float32Array(STAR_COUNT * 3);
   const col = new Float32Array(STAR_COUNT * 3);
@@ -386,13 +388,50 @@ const starGeo = new THREE.BufferGeometry();
   }
   starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   starGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  starBase = col.slice();
 }
+// Soft radial sprite so a star's brightness stays constant under sub-pixel motion. Bare
+// PointsMaterial renders hard-edged squares whose lit-pixel coverage snaps as the point
+// crosses the pixel grid - with bloom on top, every head turn made the whole field strobe
+// frame-by-frame. A feathered edge integrates smoothly, so only updateTwinkle changes brightness.
+const starTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+  const g = cv.getContext('2d');
+  const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grad.addColorStop(0.00, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+  grad.addColorStop(1.00, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 32, 32);
+  return new THREE.CanvasTexture(cv);
+})();
 const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
-  size: 2.0, sizeAttenuation: false, vertexColors: true,
+  size: 3.5, sizeAttenuation: false, vertexColors: true, map: starTex,
   transparent: true, opacity: 0.85, depthWrite: false, fog: false,
 }));
 stars.frustumCulled = false;
 scene.add(stars);
+
+// ---- Twinkle: deliberate, purely time-based star flashes (ignores head motion entirely).
+//      Each scheduled flash picks a random star, swells its colour and fades back over
+//      TWINKLE_LEN; bloom turns the peak into the bright "floodlight" blink.
+const TWINKLE_LEN  = 0.5;   // s: one flash's full rise-and-fall
+const TWINKLE_GAIN = 2.0;   // peak boost (colour x3 at the top of the sine envelope)
+const _flashes = new Map(); // star index -> seconds elapsed in its flash
+let _twinkleAcc = 0;        // fractional scheduled flashes carried between frames
+function updateTwinkle(dt) {
+  const attr = starGeo.getAttribute('color'), a = attr.array;
+  _twinkleAcc += CONFIG.twinkleRate * dt;
+  // re-picking an already-flashing star just restarts its envelope (rare, invisible)
+  for (; _twinkleAcc >= 1; _twinkleAcc--) _flashes.set((Math.random() * STAR_COUNT) | 0, 0);
+  if (!_flashes.size) return;
+  for (const [i, t] of _flashes) {
+    const nt = t + dt, k = i * 3;
+    const gain = nt >= TWINKLE_LEN ? 1 : 1 + TWINKLE_GAIN * Math.sin(Math.PI * nt / TWINKLE_LEN);
+    a[k] = starBase[k] * gain; a[k+1] = starBase[k+1] * gain; a[k+2] = starBase[k+2] * gain;
+    if (nt >= TWINKLE_LEN) _flashes.delete(i); else _flashes.set(i, nt);
+  }
+  attr.needsUpdate = true;
+}
 
 // ============================================================================
 //  Lighting - ONE sun + ambient fill.
@@ -853,6 +892,7 @@ const TWEAKS = [
   { k:'spinMax',        label:'Tumble rate',     min:0,      max:3,     step:0.1,    apply:applyMotion },
   { k:'collisions',     label:'Orb collisions',  bool:true },
   { k:'cameraCollisions', label:'You collide',   bool:true },
+  { k:'twinkleRate',    label:'Star twinkle',    min:0,      max:30,    step:0.5 },
   { k:'eyeSeparation',  label:'3D eye-sep',      min:0,      max:3,     step:0.05 },
   { k:'stereoFocus',    label:'3D focus dist',   min:5,      max:300,   step:5,      int:true },
   { k:'stereoSplit',    label:'3D split shift',  min:-200,   max:200,   step:2,      int:true, apply:applyStereoShift },
@@ -1345,6 +1385,7 @@ function animate() {
   // backdrop + stars ride along so they read as infinitely distant
   sky.position.copy(camera.position);
   stars.position.copy(camera.position);
+  updateTwinkle(dt);    // scheduled star flashes - time-based only, blind to head motion
 
   // motion-blur trails scale with current speed
   const speed = velocity.length();
