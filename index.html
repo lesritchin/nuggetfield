@@ -290,6 +290,7 @@ const CONFIG = {
   eyeSeparation:  0.9,    // world-unit gap between the eyes (bigger = stronger pop-out)
   stereoFocus:    40,     // zero-parallax distance (nearer pops out, farther recedes)
   stereoSplit:    0,      // px: slide the whole L/R pair sideways when the phone isn't centred in the headset
+  stereoConverge: 0,      // px: slide the two eye images toward each other - cancels the wall-eyed bias when the lenses sit narrower than the half-viewport centres
 };
 // pristine copy so the live-tweak panel can reset a knob to its starting value
 const DEFAULTS = JSON.parse(JSON.stringify(CONFIG));
@@ -708,6 +709,17 @@ class DualViewRenderPass extends Pass {
       renderer.getSize(this._size);
       const w = this._size.x, h = this._size.y;
       const half = Math.floor(w / 2);
+      // Convergence: each eye's image is centred on its half-viewport (~78mm apart on a big
+      // phone), but the headset's lenses sit narrower - that mismatch adds a constant outward
+      // (wall-eyed) offset to EVERYTHING, which eye-sep/focus can't cancel (they only shape
+      // depth-relative disparity). Shift each eye's image inward by `stereoConverge` px via the
+      // projection skew term - a uniform image translation, depth-independent, and no viewport
+      // offset (negative GL viewports hard-crashed some phones). m02 shifts NDC x by -m02, and
+      // c px inside a half-width viewport is 4c/w NDC; stereo.update() rebuilds the matrices
+      // every frame, so this never accumulates.
+      const conv = (CONFIG.stereoConverge | 0) * 4 / w;
+      this.stereo.cameraL.projectionMatrix.elements[8] -= conv;  // left image slides right
+      this.stereo.cameraR.projectionMatrix.elements[8] += conv;  // right image slides left
       // Always split dead-centre here. The headset-centring "split shift" is applied as a CSS
       // translate on the whole canvas (applyStereoShift) - NOT a GL viewport offset - so we never
       // hand WebGL an off-screen/negative viewport, which hard-crashed the GPU on some phones.
@@ -844,6 +856,7 @@ const TWEAKS = [
   { k:'eyeSeparation',  label:'3D eye-sep',      min:0,      max:3,     step:0.05 },
   { k:'stereoFocus',    label:'3D focus dist',   min:5,      max:300,   step:5,      int:true },
   { k:'stereoSplit',    label:'3D split shift',  min:-200,   max:200,   step:2,      int:true, apply:applyStereoShift },
+  { k:'stereoConverge', label:'3D converge',     min:-60,    max:60,    step:1,      int:true },
 ];
 
 const panel = document.createElement('div');
